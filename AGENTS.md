@@ -8,6 +8,18 @@
 > 这是有意的：它讲的是上游 Electron 桌面版的规矩（主题令牌、preload 重建、i18n 分片），
 > 对网页版 fork 不适用。需要时自己按路径去读。
 
+## 分支
+
+| 分支 | 用途 |
+| --- | --- |
+| `dev` | **开发分支**——日常改动都在这里，GitHub 的默认分支 |
+| `stable` | **稳定分支**——已经部署、可以用的版本；发布在这里打标签 |
+| `upstream` | **上游镜像**——与 `upstream/main` 完全一致，不带我们的任何改动 |
+
+`web/tools/sync-upstream.sh` 负责把 `upstream` 分支推到上游的最新状态；
+加 `--merge` 会顺手把它合进 `dev`。合并上游之前先看 `git diff upstream/main...dev`
+——上游的改动会碰到我们的 `web/`，这是冲突的主要来源。
+
 ## 这是什么仓库
 
 - 上游：[genspark-ai/genoffice](https://github.com/genspark-ai/genoffice)（Apache-2.0）——Electron 桌面办公套件，六个编辑器 + 自研 docx/pptx 引擎 + Rust xlsx 引擎 + CLI / MCP server。
