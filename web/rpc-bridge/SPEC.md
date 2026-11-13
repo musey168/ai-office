@@ -206,6 +206,14 @@ shim 把它转成 token，服务端还原成字节交给存储层。
 
 其余约 570 个通道（AI、打印、导出、tabs、集成、Zotero、拼写…）按需逐批补。
 
+### 服务端引擎的通道
+
+有些通道的活儿在**服务端**做（上游在主进程里做）：pptx 的解析与渲染树由
+`web/engine-pool` 的 worker 算好，通道只负责取回结果。
+
+**slides**：`slides:consume-pending-open`、`slides:open-path`、`slides:save`
+（编辑用的 op 通道尚未接入，见下）。
+
 ## AI 通道
 
 上游 `registerAiIpc()`（`apps/docs/src/main/docs-main.ts:4456`）由 shell 调用**一次**（`apps/shell/src/main/index.ts:7032`），六个编辑器与 shell home 共用同一批通道。网页版同样只注册一份实现——上游靠 `ipcMain.removeHandler` 做「后注册覆盖」，网页版是单一路由表，不存在覆盖顺序问题。

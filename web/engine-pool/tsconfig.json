@@ -1,0 +1,27 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "jsx": "react-jsx",
+    "types": [
+      "vite/client",
+      "node"
+    ],
+    "paths": {
+      "electron": [
+        "./src/electron-shim.ts"
+      ]
+    }
+  },
+  "include": [
+    "src",
+    "tests",
+    "build",
+    "scripts",
+    "vitest.config.ts"
+  ]
+}

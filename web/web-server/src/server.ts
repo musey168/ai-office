@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { LocalWorkspaceStore, type WorkspaceStore } from '@ai-office/workspace-store'
+import type { EngineRunner } from '@ai-office/rpc-bridge'
 import { findStaticFile, injectBridge, resolveWithinRoot, sendFile } from './static.js'
 import {
   ChannelRouter,
@@ -10,6 +11,7 @@ import {
   createDocsChannels,
   createHomeChannels,
   createPendingOpens,
+  createSlidesChannels,
   createTabChannels,
   TabRegistry,
 } from '@ai-office/rpc-bridge'
@@ -49,6 +51,8 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 export interface ServerOptions {
   port?: number
   host?: string
+  /** The engine pool that runs the server-side format engines. */
+  engines?: EngineRunner
   /** The workspace directory the file tree shows and the documents live in. */
   workspaceRoot: string
   /** Where the built renderer applications are. */
@@ -86,6 +90,9 @@ export function createOfficeServer(options: ServerOptions): OfficeServer {
     }),
   )
   router.registerAll(createAppChannels({}))
+  if (options.engines) {
+    router.registerAll(createSlidesChannels({ engines: options.engines, tabs }))
+  }
   router.registerAll(createHomeChannels({ store, tabs, pending }))
   router.registerAll(createDocsChannels({ store, bytes: router.bytes, tabs, pending }))
 
@@ -159,6 +166,32 @@ export function createOfficeServer(options: ServerOptions): OfficeServer {
       res.setHeader('content-type', 'application/octet-stream')
       res.setHeader('content-length', String(bytes.byteLength))
       res.end(bytes)
+      return
+    }
+
+    // ── the media of a slide (the upstream custom scheme, same-origin) ───
+    if (pathname.startsWith('/media/slide/') && req.method === 'GET') {
+      if (!options.engines) {
+        json(res, 404, { error: 'the engine pool is not running' })
+        return
+      }
+      const id = pathname.slice('/media/slide/'.length)
+      const mime = url.searchParams.get('mime') ?? 'application/octet-stream'
+      const media = (await options.engines.run<{ body: Uint8Array; mime: string } | null>(
+        'slides:media',
+        // the upstream URL is the key the engine keeps the bytes under —
+        // the query is part of it
+        [`genoffice-slide-media://${id}?mime=${encodeURIComponent(mime)}`],
+      )) ?? null
+      if (!media) {
+        json(res, 404, { error: 'no such slide media' })
+        return
+      }
+      res.statusCode = 200
+      res.setHeader('content-type', media.mime || mime)
+      res.setHeader('content-length', String(media.body.byteLength))
+      res.setHeader('cache-control', 'no-store')
+      res.end(Buffer.from(media.body))
       return
     }
 

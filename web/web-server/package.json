@@ -23,6 +23,7 @@
     "vitest": "^4.1.12"
   },
   "dependencies": {
+    "@ai-office/engine-pool": "file:../engine-pool",
     "@ai-office/rpc-bridge": "file:../rpc-bridge",
     "@ai-office/workspace-store": "file:../workspace-store"
   }

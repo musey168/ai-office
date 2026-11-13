@@ -36,6 +36,12 @@ export {
 } from './server/channels/home'
 export { createTabChannels, type TabChannelDeps } from './server/channels/tabs'
 export {
+  createSlidesChannels,
+  type EngineRunner,
+  type SlidesChannelDeps,
+  type SlidesOpenResult,
+} from './server/channels/slides'
+export {
   TabRegistry,
   tabKindForPath,
   type TabKind,

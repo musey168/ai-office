@@ -1,5 +1,6 @@
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { EnginePool } from '@ai-office/engine-pool'
 import { createOfficeServer } from './server.js'
 
 /**
@@ -23,12 +24,17 @@ const workspaceRoot = envPath('AIOFFICE_WORKSPACE', resolve(here, '../../workspa
 const rendererRoot = envPath('AIOFFICE_RENDERERS', resolve(here, '../dist'))
 const bridgeRoot = envPath('AIOFFICE_BRIDGES', resolve(here, '../../rpc-bridge/dist'))
 
+// The format engines run in worker threads — a .pptx parse must not block
+// the HTTP event loop.
+const engines = new EnginePool({ workspaceRoots: [workspaceRoot] })
+
 const office = createOfficeServer({
   port,
   host,
   workspaceRoot,
   rendererRoot,
   bridgeRoot,
+  engines,
   log: (message) => console.log(message),
 })
 
@@ -40,6 +46,6 @@ office.server.listen(port, host, () => {
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
-    void office.close().then(() => process.exit(0))
+    void office.close().then(() => engines.close()).then(() => process.exit(0))
   })
 }

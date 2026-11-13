@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
  */
 const here = dirname(fileURLToPath(import.meta.url))
 
-const APPS = process.argv.slice(2).length ? process.argv.slice(2) : ['docs', 'shell']
+const APPS = process.argv.slice(2).length ? process.argv.slice(2) : ['docs', 'shell', 'slides']
 
 for (const app of APPS) {
   process.stdout.write(`\n=== building renderer: ${app} ===\n`)

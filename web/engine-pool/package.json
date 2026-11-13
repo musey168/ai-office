@@ -1,0 +1,26 @@
+{
+  "name": "@ai-office/engine-pool",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Server-side engine scheduling for the AI Office web port: upstream format engines, run off the HTTP event loop",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build:worker": "vite build --config build/vite.worker.config.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.7",
+    "vitest": "^4.1.12"
+  },
+  "dependencies": {
+    "@ai-office/rpc-bridge": "file:../rpc-bridge",
+    "@ai-office/workspace-store": "file:../workspace-store"
+  }
+}

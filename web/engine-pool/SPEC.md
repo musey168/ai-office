@@ -75,6 +75,30 @@ tags: [web, engine]
 - 任务模型：请求-应答，带超时与取消；
 - 队列在 HTTP 进程内维护，worker 只做纯计算。
 
+## 服务端怎么编译上游的引擎代码
+
+上游的引擎包是纯 TypeScript，但**把解析结果变成渲染树**的那一层在 app 的 main 进程里
+（`apps/slides/src/main/session-state.ts` 的 `buildAllRenderSlides`），那个文件 import 了 Electron。
+服务端没有窗口，所以 worker 构建时把 `electron` 别名到**服务端替身**
+（`web/engine-pool/src/electron-shim.ts`）：窗口查不到、菜单不弹、对话框一律取消——
+诚实地说「这个环境没有」，而不是假装成功。
+
+worker 构建（`npm run build:worker`，vite ssr 目标）的三件特别的事：
+
+- `electron` → 服务端替身（与浏览器侧同一手法，只是换了一边）；
+- `?asset`（electron-vite 的约定，主进程按路径 import 资产）→ 资产随产物拷出、按相对路径引用，
+  这样构建机与服务器可以不在同一个目录；
+- `__dirname`（上游模块顶层就用它算 preload/renderer 路径）→ 按文件所在目录替换成真实路径。
+
+引擎调用走 `packages/pptx-engine` 的 `openPptx` / `savePptx`（上游 CLI 门面
+`packages/cli/src/formats/pptx.ts:42/50` 只是它们的一行包装，不额外引入依赖）。
+
+**渲染树里的媒体 URL**：上游给幻灯片媒体发的是 `genoffice-slide-media://archive/<uuid>?mime=…`
+（`apps/slides/src/main/session-state.ts:592`），浏览器取不到自定义 scheme。
+服务端在把渲染树交给浏览器**之前**把这些 URL 改写成同源的 `/media/slide/<uuid>`，
+字节由还持有该演示文稿的 worker 提供（上游的 `readSlideMedia`，`session-state.ts:606`）——
+**不用改上游一行**。
+
 ## 已知耦合
 
 - `packages/cli/src/formats/xlsx.ts:45` 直接 import `apps/sheets/src/main/xlsx-sidecar-client`——上游的反向依赖（CLI 引 app 代码）。网页版**不改上游**，而是在 `web/engine-pool` 内引用同一个客户端文件，行为与上游 CLI 一致；
