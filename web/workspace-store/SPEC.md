@@ -34,15 +34,20 @@ tags: [web, storage, security]
 ## 接口
 
 ```
+root                   → string           工作区根
 list(dirPath)          → Entry[]
 read(path)             → Uint8Array
 write(path, bytes)     → void
 move(src, dst)         → void
 delete(path)           → void
+createDirectory(path)  → void
 stat(path)             → FileMeta
 snapshot(path)         → FileSnapshot
 isExternallyModified(snapshot) → boolean
 ```
+
+**`createDirectory` 为什么在存储层**：建文件夹也是碰文件系统，必须走同一个入口与同一道围栏——
+绕过它就等于开了一条逃逸路径。
 
 **不提供 `search()`**：检索属 `web/file-index`，两个模块各持一半会让边界失守。
 

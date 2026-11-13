@@ -1,0 +1,27 @@
+{
+  "name": "@ai-office/rpc-bridge",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Electron IPC equivalent for the AI Office web port: browser-side shim + server-side channel router",
+  "exports": {
+    ".": "./src/index.ts",
+    "./shim": "./src/shim.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build:bridge": "vite build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.7",
+    "vitest": "^4.1.12"
+  },
+  "dependencies": {
+    "@ai-office/workspace-store": "file:../workspace-store"
+  }
+}

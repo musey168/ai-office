@@ -142,6 +142,16 @@ export class LocalWorkspaceStore implements WorkspaceStore {
     }
   }
 
+  async createDirectory(dirPath: string): Promise<void> {
+    const abs = this.fence.resolvePath(dirPath)
+    await mkdir(abs, { recursive: true }).catch((error: unknown) => {
+      throw this.toWorkspaceError(error, dirPath)
+    })
+    // Re-check the fence: a parent that was a symlink pointing outside the
+    // workspace must not become a way out of it.
+    this.fence.assertInside(abs)
+  }
+
   async stat(filePath: string): Promise<FileMeta> {
     const abs = this.fence.resolvePath(filePath)
     const stats = await stat(abs).catch((error: unknown) => {

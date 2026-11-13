@@ -72,6 +72,21 @@ tags: [web, ipc]
 
 通道名一律不改。
 
+## 落点与构建
+
+代码落在 `web/rpc-bridge/`，**自包含**（自带 `package.json` 与自己的 `node_modules`），只依赖 `web/workspace-store`（`file:` 依赖）。
+
+浏览器端的桥接层**不手写**：构建时把 `electron` 这个 import 别名指向我们的 shim（`src/shim.ts`），
+把上游 7 个 preload 源码（`apps/<app>/src/preload/index.ts`）**原样**编成浏览器 bundle：
+
+- 上游 preload 只从 electron 导入 `contextBridge`、`ipcRenderer`、`webUtils`（sheets 另加 `webFrame`）——shim 面很小；
+- 其余 `@genoffice/*` 引用全是 type-only，运行时依赖只有 `@genoffice/electron-utils/drop-open`（它自己也只 import electron）与 `@genoffice/ai-provider/browser`、`@genoffice/ui/ai-panel-prefs`（两者都是零依赖自包含文件）；
+- 产物为 ES module（`<script type="module" src="/bridge/<app>.js">`），模块脚本按文档顺序执行，bridge 在前；
+- `@genoffice/*` 子路径按规则解析到上游 checkout 的源码（与上游自己的 vite 配置同思路），上游新增子路径不必改我们的配置。
+
+**为什么不用手写桥接层**：上游那约 600 个通道的名字、参数与返回形状已经写在 preload 里；
+重新表达一遍就等于有了第二份通道表，会在合上游时静默失配。
+
 ## 协议映射
 
 | 上游语义 | 网页版 | 说明 |
@@ -81,6 +96,24 @@ tags: [web, ipc]
 | `on`（主进程推送） | `GET /events`（SSE） | 按通道名过滤订阅 |
 | AI 流式回合 | `POST /ai/stream` 发起 + `GET /ai/stream/:requestId`（SSE） | 见「AI 通道」 |
 | 长耗时任务 | `POST /rpc/:channel` 返回 `{taskId}` + `GET /tasks/:taskId` | 见「长耗时通道」 |
+
+### 字节：一次性 token 与一次性 URL
+
+Electron 的 IPC 用结构化克隆，能直接传 `ArrayBuffer`；JSON 不能。两条方向各有做法：
+
+| 方向 | 做法 |
+| --- | --- |
+| renderer → 服务端 | shim 先把二进制参数上传到字节端点，JSON 里只留 token；服务端消费 token 时取回字节 |
+| 服务端 → renderer | 服务端把二进制结果放进字节存储，JSON 里回一个 token 形状的对象 |
+
+**文档字节走的是上游自己的机制**：上游的 `docs:open-path` **不返回字节**，而是返回
+`OpenDocxResult { path, name, dataUrl, hash }`，其中 `dataUrl` 是一次性 URL
+（`genoffice-docx-media://handoff/<uuid>`，TTL 60s / 上限 8 个 / 1GB），
+renderer 自己 `fetch` 那个 URL 取字节（`apps/docs/src/renderer/doc-bytes.ts:2`）。
+网页版把 `dataUrl` 换成同源的 `/media/<token>`，**上游 renderer 代码一行不用改**。
+
+同理，保存时上游传的是 `data: ArrayBuffer`（`apps/docs/src/preload/index.ts:119`），
+shim 把它转成 token，服务端还原成字节交给存储层。
 
 ### 定向问题
 
@@ -116,6 +149,28 @@ tags: [web, ipc]
 
 这些属于[架构文档](../architecture.md)列的原生能力缺口，处置结论要能逐条对得上。
 
+## 首片覆盖的通道
+
+第一刀 = **在浏览器里打开一个 .docx → 编辑 → 保存回原文件**，外加首页文件树。
+
+**docs**：`docs:open-path`、`docs:consume-pending-open`、`docs:save`、`docs:save-to`、
+`docs:save-new`、`docs:recent`、`docs:font-aliases`、`docs:password-intent-revision`
+
+**app（启动时读）**：`app:get-language`、`app:get-theme`、`app:get-document-theme`、
+`app:get-ai-panel-prefs`、`app:get-author-name`、`app:auto-save-default`、`docs:system-locale`
+
+**home（文件树）**：`home:folder-roots`、`home:folder-list`、`home:folder-create`、
+`home:open-path`、`home:recents`、`home:starred`、`home:starred-groups`、`home:account-status`
+
+**明确砍掉的两条原生通道**：`docs:open`（原生打开框）与 `docs:save-as`（原生保存框）——
+网页版用首页文件树选路径，渲染器改走 `docs:open-path` / `docs:save-to` / `docs:save-new`。
+
+**两处主进程弹原生框的通道必须改成二段式**：`docs:confirm-document-replace`（放弃修改确认）与
+`docs:save` 遇到外部修改时的覆盖确认——服务端只返回状态（`reason: 'external-modified'`），
+由渲染器自绘对话框再回调。这是原生能力缺口表里唯一两处「主进程主动弹窗」。
+
+其余约 570 个通道（AI、打印、导出、tabs、集成、Zotero、拼写…）按需逐批补。
+
 ## AI 通道
 
 上游 `registerAiIpc()`（`apps/docs/src/main/docs-main.ts:4456`）由 shell 调用**一次**（`apps/shell/src/main/index.ts:7032`），六个编辑器与 shell home 共用同一批通道。网页版同样只注册一份实现——上游靠 `ipcMain.removeHandler` 做「后注册覆盖」，网页版是单一路由表，不存在覆盖顺序问题。
@@ -149,7 +204,10 @@ tags: [web, ipc]
 4. API 类型只从上游 `shared/` 引入，本模块不定义第二套；
 5. SSE 必须带 ping 保活，与上游 240 秒看门狗对齐；
 6. 本模块不得直接访问文件系统；
-7. 任何跨标签推送都必须带 tabId。
+7. 任何跨标签推送都必须带 tabId；
+8. **通道契约只有一份**——上游的 preload 源码；本模块不手写通道表，也不改上游 preload；
+9. 字节不进 JSON：走一次性 token（入站）与一次性 URL（出站）；
+10. 服务端访问文件一律经 `web/workspace-store`，不得绕过围栏。
 
 ## 风险
 

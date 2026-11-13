@@ -41,6 +41,8 @@ export interface FileSnapshot {
  * resolved through here, so this is the only place that touches the disk.
  */
 export interface WorkspaceStore {
+  /** The workspace root relative paths resolve against. */
+  readonly root: string
   /** Entries of a directory, sorted by name. */
   list(dirPath: string): Promise<Entry[]>
   /** The bytes of a file. */
@@ -51,6 +53,8 @@ export interface WorkspaceStore {
   move(srcPath: string, destPath: string): Promise<void>
   /** Removes a file. Directories are refused. */
   delete(filePath: string): Promise<void>
+  /** Creates a directory (and any missing parent). */
+  createDirectory(dirPath: string): Promise<void>
   /** Metadata of a file or directory. */
   stat(filePath: string): Promise<FileMeta>
   /** The disk state of a file, including its content digest. */
