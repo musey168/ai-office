@@ -44,3 +44,6 @@ _scratch-*
 
 # AI Office 本地部署信息（含凭据，不进版本控制）
 /deploy/server.local.md
+
+# ThinkRail host scratch space (task-specs, todos)
+.thinkrail/
