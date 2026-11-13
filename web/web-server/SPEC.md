@@ -107,7 +107,11 @@ shell 的 renderer 是多入口（`index` / `update` / `pdf-password`）；第�
 
 - SSE 响应必须禁用反向代理缓冲（`X-Accel-Buffering: no`），否则事件会被代理攒着不发；
 - 断线重连由浏览器 `EventSource` 自动完成，事件必须带 id 以便续传；
-- 心跳与 `ping` 保活由 `web/rpc-bridge` 负责（对应上游 240 秒静默看门狗）。
+- 心跳与 `ping` 保活由 `web/rpc-bridge` 负责（对应上游 240 秒静默看门狗）；
+- **断开信号是响应关闭**（`res.on('close')`），不是请求关闭：`req` 在请求体读完时就发 'close'，
+  照着它拆流会让订阅刚建立就死掉；
+- 关闭服务时要 `closeAllConnections()`——事件流是长连接，否则关不干净；
+- 按通道过滤是可选的（`?channels=a,b`）；**空过滤 = 订阅全部**。
 
 ## 请求与错误
 

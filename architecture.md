@@ -200,11 +200,13 @@ packages/*/              ← 上游文件，原则上不改
 - renderer 入口挂载 `web/rpc-bridge` 的 bridge 脚本（否则拿不到 preload 替身）；
 - `apps/*/src/shared/ipc.ts`——只跟上游改，不自己改；
 - 构建配置（`electron.vite.config.ts` → 增加 web 产物），按 app 逐个增加；
-- **docs 的 CSP**（`apps/docs/src/renderer/index.html:6-8`）——`img-src` / `connect-src` 里写死了 `genoffice-docx-media:`，网页版必须改成服务端 URL，否则文档里的图片全部加载不出来。这是一处**硬阻塞**，不是可选优化；
-  - **实测结论**：同源之后 CSP 本身不用改（`'self'` 已经覆盖 `/media/<token>` 与 `/media/lazy/…`）；
-    真正的阻塞是 **URL 的 scheme 写死在引擎里**（`packages/docx-engine/src/lazy-media.ts:38` `lazyMediaUrl()`），
-    浏览器取不到 `genoffice-docx-media://<hash>/<part>`。修法是把 base 变成可配置的（默认值保持上游行为），
-    这需要把 `packages/docx-engine` 登记为新的插入点。
+- **docs 的 CSP**（`apps/docs/src/renderer/index.html:6-8`）——`img-src` / `connect-src` 里写死了 `genoffice-docx-media:`；
+  - **实测结论（第一刀跑完后的更正）**：**不用改**。网页版不做「瘦身」（瘦身是上游**主进程**的行为，
+    `apps/docs/src/main/lazy-media.ts:78 openLazyDocx`，只对媒体 ≥1MB 的文档做），
+    于是 `packages/docx-engine/src/parse.ts:8544 mediaPartSrc()` 走的是内联分支——图片变成 `data:` URL，
+    `img-src 'self' data: blob:` 已经允许。浏览器实测：文档里的图片正常渲染。
+  - 只有将来要在服务端做瘦身（省浏览器的内存与传输）时，才需要把 `lazyMediaUrl()` 的 base 变成可配置的，
+    那时把 `packages/docx-engine` 登记为新的插入点。
 - **headless 分支**——渲染服务需要在 renderer 里区分「普通渲染」与「无头导出」，上游已有 `--headless-export` 的机制（`packages/electron-utils/src/headless-export.ts:235` `runHeadlessRendererExport`），网页版复用同一机制。
 
 **禁改清单**要单独成文，列明上游目录里「改了会与上游冲突、且可以在 `web/` 内解决」的文件。

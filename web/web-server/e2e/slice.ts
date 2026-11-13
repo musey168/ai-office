@@ -22,6 +22,11 @@ const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '../../..')
 
 const FIXTURE = join(repoRoot, 'apps/docs/tests/pagination-corpus/docx/simple.docx')
+/** A document with a picture in it — the images have to render in the browser. */
+const PICTURE_FIXTURE = join(
+  repoRoot,
+  'apps/docs/tests/pagination-corpus/geometry/geo-anchored-pictures.docx',
+)
 const MARKER = '端到端改的字'
 
 function step(message: string): void {
@@ -35,7 +40,9 @@ function ok(message: string): void {
 async function main(): Promise<void> {
   const workspace = realpathSync(await mkdtemp(join(tmpdir(), 'aio-e2e-')))
   const document = join(workspace, '简单文档.docx')
+  const withPicture = join(workspace, '带图片的文档.docx')
   await copyFile(FIXTURE, document)
+  await copyFile(PICTURE_FIXTURE, withPicture)
   const before = await stat(document)
 
   const office = createOfficeServer({
@@ -53,10 +60,16 @@ async function main(): Promise<void> {
 
   const browser = await chromium.launch()
   const page = await browser.newPage()
+  page.on('request', (request) => {
+    if (request.url().includes('/rpc/tabs')) {
+      console.log('  → RPC', decodeURIComponent(request.url().split('/rpc/')[1] ?? ''))
+    }
+  })
   const problems: string[] = []
   page.on('pageerror', (error) => problems.push(`pageerror: ${error.message}`))
   page.on('console', (message: ConsoleMessage) => {
     if (message.type() === 'error') problems.push(`console: ${message.text()}`)
+    if (message.text().includes('bridge-debug')) console.log('  ', message.text())
   })
 
   try {
@@ -72,11 +85,11 @@ async function main(): Promise<void> {
     await rootRow.waitFor({ timeout: 30_000 })
     await rootRow.locator('button.tree-chevron').click()
     await rootRow.click()
-    await page.waitForSelector('text=简单文档.docx', { timeout: 30_000 })
+    await page.waitForSelector('text=简单文档.docx >> visible=true', { timeout: 30_000 })
     ok('文件列表列出了 简单文档.docx')
 
     step('点开文档')
-    await page.click('text=简单文档.docx')
+    await page.click('text=简单文档.docx >> visible=true')
     const frameElement = await page.waitForSelector('iframe[data-ai-office-editor]', {
       timeout: 30_000,
     })
@@ -109,6 +122,58 @@ async function main(): Promise<void> {
       throw new Error('the file on disk is unchanged')
     }
     ok('磁盘上的文件确实变了')
+
+    step('文档里的图片能显示')
+    // Upstream hides the home content while a document tab is active — the
+    // user goes back to the home tab to pick the next file.
+    await page.click('.tab-home')
+    try {
+      await page.waitForSelector('text=带图片的文档.docx >> visible=true', { timeout: 10_000 })
+    } catch (error) {
+      const state = await page.evaluate(`(() => {
+        const content = document.querySelector('.app-frame-content')
+        const tabs = [...document.querySelectorAll('.tab-item')].map((el) => ({
+          text: (el.textContent || '').trim().slice(0, 16), active: el.className.includes('active'),
+        }))
+        const names = [...document.querySelectorAll('.recent-name, .file-name, td, .name-cell')]
+          .map((el) => (el.textContent || '').trim().slice(0, 20))
+        return JSON.stringify({
+          homeVisibility: content ? getComputedStyle(content).visibility : 'none',
+          tabs, names: names.slice(0, 20),
+        })
+      })()`)
+      const serverTabs = await page.evaluate(`(async () => {
+        const res = await fetch('/rpc/tabs:list', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ args: [] }),
+        })
+        return JSON.stringify((await res.json()).value)
+      })()`)
+      throw new Error(`${(error as Error).message}\n页面状态：${state}\n服务端标签：${serverTabs}`)
+    }
+    await page.click('text=带图片的文档.docx >> visible=true')
+    await page.waitForFunction(
+      () => {
+        const frame = document.querySelector('iframe[data-ai-office-editor]') as HTMLIFrameElement | null
+        const inner = frame?.contentDocument
+        return (inner?.querySelectorAll('.ProseMirror img').length ?? 0) > 0
+      },
+      undefined,
+      { timeout: 60_000 },
+    )
+    const pictures = await page.evaluate(() => {
+      const frame = document.querySelector('iframe[data-ai-office-editor]') as HTMLIFrameElement
+      const images = [...frame.contentDocument!.querySelectorAll('.ProseMirror img')]
+      return images.map((image) => ({
+        src: (image as HTMLImageElement).src.slice(0, 40),
+        width: (image as HTMLImageElement).naturalWidth,
+      }))
+    })
+    const rendered = pictures.filter((picture) => picture.width > 0)
+    if (rendered.length === 0) {
+      throw new Error(`the pictures did not render: ${JSON.stringify(pictures)}`)
+    }
+    ok(`${rendered.length} 张图片渲染出来了（${pictures[0]?.src}…）`)
 
     if (problems.length) {
       console.log('\n浏览器里报的问题：')

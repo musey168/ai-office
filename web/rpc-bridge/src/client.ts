@@ -37,7 +37,6 @@ export class BridgeClient {
   private readonly contextProvider: (() => RpcContext | undefined) | undefined
   private readonly listeners = new Map<string, Set<(event: unknown, ...args: unknown[]) => void>>()
   private source: EventSource | null = null
-  private subscribedChannels = ''
 
   constructor(options: BridgeClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? ''
@@ -113,17 +112,17 @@ export class BridgeClient {
   }
 
   /**
-   * Reopen the event stream when the set of subscribed channels changes.
-   * The server filters by channel, so an unused channel costs no traffic.
+   * One event stream per page, opened once and kept.
+   *
+   * The channel set grows and shrinks as the page mounts and unmounts its
+   * listeners. Reconnecting on every change looked tidier, but the window
+   * between the old stream closing and the new one opening silently loses
+   * events — and the page is exactly where the user is looking when it
+   * matters. So the stream stays open and the dispatch filters locally.
    */
   private syncSubscription(): void {
-    const channels = [...this.listeners.keys()].sort().join(',')
-    if (channels === this.subscribedChannels) return
-    this.subscribedChannels = channels
-    this.source?.close()
-    this.source = null
-    if (!channels) return
-    const url = `${this.baseUrl}/events?channels=${encodeURIComponent(channels)}`
+    if (this.source) return
+    const url = `${this.baseUrl}/events`
     const source = this.eventSourceFactory(url)
     source.onmessage = (event: MessageEvent) => {
       void this.dispatch(event.data)

@@ -140,6 +140,16 @@ renderer 自己 `fetch` 那个 URL 取字节（`apps/docs/src/renderer/doc-bytes
 同理，保存时上游传的是 `data: ArrayBuffer`（`apps/docs/src/preload/index.ts:119`），
 shim 把它转成 token，服务端还原成字节交给存储层。
 
+### 事件流：一条连接，客户端自己筛
+
+上游的 `webContents.send` 是按窗口投递的。网页版的一条 SSE 连接要服务整个页面，
+而页面的监听集合会随组件挂载/卸载变化。**按通道过滤 + 通道集合变了就重连**的做法有两个问题：
+重连的缝隙里事件会静默丢失，而且每次挂载都要断一次。
+
+所以：**每个页面一条连接，连上就不换**；订阅不带通道过滤，客户端按本地监听表分发。
+服务端保留了按通道过滤的能力（`?channels=a,b`），给需要窄订阅的其他客户端用；
+**空过滤 = 订阅全部**。
+
 ### 定向问题
 
 上游的 `webContents.send` 是 **per-tab 定向**的：`menu:command`（docs）、`menu:action`（sheets）、`slides:menu`（slides）、`docs:mcp-command`、`sheets:mcp-command` 只发给某一个标签页。BroadcastChannel 是全页面广播，**必须带 tabId**，否则多标签串扰。
@@ -230,6 +240,8 @@ shim 把它转成 token，服务端还原成字节交给存储层。
    只有请求不合法才是 4xx）
 4. API 类型只从上游 `shared/` 引入，本模块不定义第二套；
 5. SSE 必须带 ping 保活，与上游 240 秒看门狗对齐；
+   断开信号看**响应**（`res.on('close')`）——`req` 在请求体读完时就发 'close'，
+   照着它拆流会让每个订阅在建立后立刻死掉，页面陷入重连循环、事件随机丢失；
 6. 本模块不得直接访问文件系统；
 7. 任何跨标签推送都必须带 tabId；
 8. **通道契约只有一份**——上游的 preload 源码；本模块不手写通道表，也不改上游 preload；

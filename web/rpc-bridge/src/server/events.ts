@@ -23,10 +23,15 @@ export class EventHub {
     }
   }
 
-  /** Push an event to every subscriber listening for that channel. */
+  /**
+   * Push an event to every subscriber listening for that channel.
+   *
+   * A subscription with **no** channel filter takes everything — that is
+   * what a client that filters locally asks for.
+   */
   publish(channel: string, args: unknown[]): void {
     for (const subscription of this.subscriptions) {
-      if (!subscription.channels.has(channel)) continue
+      if (subscription.channels.size > 0 && !subscription.channels.has(channel)) continue
       subscription.send({ channel, args })
     }
   }

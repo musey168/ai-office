@@ -99,14 +99,15 @@ describe('BridgeClient', () => {
     const seen: unknown[] = []
     client.on('docs:opened', (_event, payload) => seen.push(payload))
     await vi.waitFor(() => expect(FakeEventSource.last).not.toBeNull())
-    expect(FakeEventSource.last?.url).toContain('channels=docs%3Aopened')
+    // one stream per page, no channel filter — the client filters locally
+    expect(FakeEventSource.last?.url).toBe('/events')
     FakeEventSource.last?.onmessage?.(
       new MessageEvent('message', { data: JSON.stringify({ channel: 'docs:opened', args: ['x'] }) }),
     )
     await vi.waitFor(() => expect(seen).toEqual(['x']))
   })
 
-  it('reopens the stream when the channel set changes', async () => {
+  it('keeps one stream open when the channel set changes', async () => {
     const { impl } = fakeFetch({})
     const client = new BridgeClient({
       fetchImpl: impl,
@@ -115,10 +116,29 @@ describe('BridgeClient', () => {
     const off = client.on('a', () => {})
     await vi.waitFor(() => expect(FakeEventSource.last).not.toBeNull())
     const first = FakeEventSource.last
+    // Reconnecting would drop the events that fall into the gap between the
+    // old stream closing and the new one opening — the page keeps one.
     client.on('b', () => {})
-    await vi.waitFor(() => expect(FakeEventSource.last).not.toBe(first))
-    expect(first?.closed).toBe(true)
+    await new Promise((done) => setTimeout(done, 20))
+    expect(FakeEventSource.last).toBe(first)
+    expect(first?.closed).toBe(false)
     off()
+  })
+
+  it('delivers an event only to the listeners of its channel', async () => {
+    const { impl } = fakeFetch({})
+    const client = new BridgeClient({
+      fetchImpl: impl,
+      eventSourceFactory: (url) => new FakeEventSource(url) as unknown as EventSource,
+    })
+    const seen: string[] = []
+    client.on('a', () => seen.push('a'))
+    client.on('b', () => seen.push('b'))
+    await vi.waitFor(() => expect(FakeEventSource.last).not.toBeNull())
+    FakeEventSource.last?.onmessage?.(
+      new MessageEvent('message', { data: JSON.stringify({ channel: 'a', args: [] }) }),
+    )
+    await vi.waitFor(() => expect(seen).toEqual(['a']))
   })
 
   it('stops delivering after removeListener', async () => {

@@ -79,7 +79,12 @@ export function createOfficeServer(options: ServerOptions): OfficeServer {
   const tabs = new TabRegistry()
   const pending = createPendingOpens()
 
-  router.registerAll(createTabChannels({ tabs, publish: (channel, args) => router.events.publish(channel, args) }))
+  router.registerAll(
+    createTabChannels({
+      tabs,
+      publish: (channel, args) => router.events.publish(channel, args),
+    }),
+  )
   router.registerAll(createAppChannels({}))
   router.registerAll(createHomeChannels({ store, tabs, pending }))
   router.registerAll(createDocsChannels({ store, bytes: router.bytes, tabs, pending }))
@@ -182,6 +187,9 @@ export function createOfficeServer(options: ServerOptions): OfficeServer {
     store,
     close: () =>
       new Promise<void>((done) => {
+        // The event streams are long-lived; without this the server would
+        // wait for them before shutting down.
+        server.closeAllConnections?.()
         server.close(() => done())
       }),
   }
@@ -294,12 +302,19 @@ function serveEvents(req: IncomingMessage, res: ServerResponse, router: ChannelR
   const unsubscribe = router.events.subscribe(channels, send)
   // Upstream's renderer watches for a silent connection too.
   const heartbeat = setInterval(() => res.write(': ping\n\n'), 30_000)
+  let closed = false
   const close = (): void => {
+    if (closed) return
+    closed = true
     clearInterval(heartbeat)
     unsubscribe()
     res.end()
   }
-  req.on('close', close)
+  // The **response** closing is the disconnect signal. `req` emits 'close' as
+  // soon as the request body is read — for a GET with no body that is
+  // immediately — and tearing the stream down on it would kill every
+  // subscription before it could deliver anything.
+  res.on('close', close)
   req.on('error', close)
 }
 
