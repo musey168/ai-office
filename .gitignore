@@ -47,3 +47,6 @@ _scratch-*
 
 # ThinkRail host scratch space (task-specs, todos)
 .thinkrail/
+
+# web/ modules install their own dependencies
+node_modules/
