@@ -1,3 +1,5 @@
+import { encodePng } from './png'
+
 /**
  * The server-side stand-in for Electron.
  *
@@ -100,19 +102,55 @@ export const ipcRenderer = {
   removeListener: () => {},
 }
 
+/**
+ * The image object upstream's PDF rasterizer builds its PNGs with.
+ *
+ * Electron's `nativeImage` is a native module; the server has none, so the
+ * shim encodes the PNG itself (see `png.ts`). The bytes are the same.
+ */
+export interface ShimImage {
+  isEmpty(): boolean
+  getSize(): { width: number; height: number }
+  toPNG(): Buffer
+  toBitmap(): Buffer
+}
+
 export const nativeImage = {
-  createFromBuffer: (): { isEmpty: () => boolean; toPNG: () => Buffer } => ({
-    isEmpty: () => true,
-    toPNG: () => Buffer.alloc(0),
+  // Decoding an arbitrary image is not something the server needs: the only
+  // path that asks for it is inserting an image into a PDF, which is not
+  // part of the port yet.
+  createFromBuffer: (buffer?: Buffer): ShimImage => ({
+    isEmpty: () => !buffer || buffer.length === 0,
+    getSize: () => ({ width: 0, height: 0 }),
+    toPNG: () => buffer ?? Buffer.alloc(0),
+    toBitmap: () => Buffer.alloc(0),
   }),
-  createFromPath: (): { isEmpty: () => boolean; toPNG: () => Buffer } => ({
+  createFromPath: (): ShimImage => ({
     isEmpty: () => true,
+    getSize: () => ({ width: 0, height: 0 }),
     toPNG: () => Buffer.alloc(0),
+    toBitmap: () => Buffer.alloc(0),
   }),
-  createEmpty: (): { isEmpty: () => boolean; toPNG: () => Buffer } => ({
+  createEmpty: (): ShimImage => ({
     isEmpty: () => true,
+    getSize: () => ({ width: 0, height: 0 }),
     toPNG: () => Buffer.alloc(0),
+    toBitmap: () => Buffer.alloc(0),
   }),
+  createFromBitmap: (
+    data?: Buffer,
+    options?: { width?: number; height?: number },
+  ): ShimImage => {
+    const width = options?.width ?? 0
+    const height = options?.height ?? 0
+    const pixels = data ?? Buffer.alloc(0)
+    return {
+      isEmpty: () => width === 0 || height === 0,
+      getSize: () => ({ width, height }),
+      toPNG: () => encodePng({ width, height, data: pixels }),
+      toBitmap: () => pixels,
+    }
+  },
 }
 
 export const shell = {

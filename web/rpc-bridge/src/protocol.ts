@@ -7,9 +7,16 @@
  * the byte endpoint, and the JSON payload carries only the token.
  */
 
-/** A binary value in a JSON payload. */
+/**
+ * A binary value in a JSON payload.
+ *
+ * `__as` says what the peer should hand the application: most channels
+ * answer with an `ArrayBuffer` (that is what Electron's IPC delivers),
+ * but a few — the PDF's chunked read, for one — expect a `Uint8Array`.
+ */
 export interface ByteToken {
   __bytes: string
+  __as?: 'arraybuffer' | 'u8'
 }
 
 export function isByteToken(value: unknown): value is ByteToken {

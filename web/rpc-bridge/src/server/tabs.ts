@@ -131,6 +131,22 @@ export class TabRegistry {
     return tab
   }
 
+  /**
+   * Open an untitled document in a new tab.
+   *
+   * Upstream opens a view with no file behind it; the file appears when the
+   * document is saved. The tab carries no path, so the app boots into its
+   * own blank state.
+   */
+  openBlank(kind: TabKind, title: string): Tab {
+    this.counter += 1
+    const tab: Tab = { id: `tab-${this.counter}`, kind, title }
+    this.tabs.set(tab.id, tab)
+    this.activeId = tab.id
+    this.notify()
+    return tab
+  }
+
   activate(id: string): boolean {
     if (!this.tabs.has(id)) return false
     this.activeId = id

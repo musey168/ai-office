@@ -38,8 +38,9 @@ echo "→ the bridges"
 cp -R "$repo/web/rpc-bridge/dist/." "$out/app/bridges/"
 
 echo "→ the engine worker"
-cp "$repo/web/engine-pool/dist/worker.mjs" "$out/app/worker/worker.mjs"
-cp "$repo/web/engine-pool/dist/harfbuzz.wasm" "$out/app/worker/harfbuzz.wasm"
+# The worker is code-split and carries wasm assets (harfbuzz for the text
+# layout, PDFium for the page rasterizer); the whole directory travels.
+cp -R "$repo/web/engine-pool/dist/." "$out/app/worker/"
 
 # The bundle is ESM; the marker keeps Node from treating it as CommonJS.
 cat > "$out/app/package.json" <<'JSON'

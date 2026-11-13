@@ -174,7 +174,8 @@ export class BridgeClient {
 
   private async decodeValue(value: unknown): Promise<unknown> {
     if (isByteToken(value)) {
-      return toArrayBuffer(await this.downloadBytes(value.__bytes))
+      const bytes = await this.downloadBytes(value.__bytes)
+      return value.__as === 'u8' ? bytes : toArrayBuffer(bytes)
     }
     if (Array.isArray(value)) return this.decodeArgs(value)
     if (value && typeof value === 'object') {

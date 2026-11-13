@@ -1,4 +1,5 @@
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { basename, dirname, resolve } from 'node:path'
 import { defineConfig, type Plugin } from 'vite'
 import { upstreamWorkspaceResolver } from '@ai-office/rpc-bridge/build/upstream-resolver'
@@ -87,10 +88,32 @@ export default defineConfig({
     upstreamWorkspaceResolver(),
     upstreamDirnamePlugin(),
     nodeAssetPlugin(resolve(__dirname, '../dist')),
+    // The PDFium wasm travels with the worker: the upstream lookup falls
+    // back to `<resourcesPath>/wasm/<file>`, and the worker's resources
+    // path is its own directory.
+    {
+      name: 'pdfium-wasm',
+      closeBundle() {
+        try {
+          const source = createRequire(import.meta.url).resolve(
+            '@embedpdf/pdfium/pdfium.wasm',
+          )
+          const target = resolve(__dirname, '../dist/wasm')
+          mkdirSync(target, { recursive: true })
+          copyFileSync(source, resolve(target, 'pdfium.wasm'))
+          process.stdout.write(`pdfium.wasm → ${target}\n`)
+        } catch (error) {
+          process.stderr.write(`pdfium.wasm was not copied: ${String(error)}\n`)
+        }
+      },
+    },
   ],
   resolve: {
     alias: [{ find: /^electron$/, replacement: resolve(__dirname, '../src/electron-shim.ts') }],
   },
+  // The worker is copied to the server as a single file, so its
+  // dependencies have to be inside it.
+  ssr: { noExternal: ['pdf-lib'] },
   build: {
     ssr: true,
     outDir: 'dist',

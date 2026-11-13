@@ -82,6 +82,12 @@ shell 的 renderer 是多入口（`index` / `update` / `pdf-password`）；第�
 `GET /` **跳转**到 `/app/shell/`（302）。应用本身就是首页，
 让人在地址栏敲一个根路径然后看见 404，是没有理由的。
 
+## 缓存
+
+- renderer 的资源文件名**带哈希** → `immutable` 一年 ✓；
+- **bridge 的文件名不带哈希**（`/bridge/docs.js`）→ 必须 `no-cache`，
+  否则重新部署之后，浏览器还在用旧的那份 bridge ✓。
+
 ## 静态资源
 
 上游打包后 renderer 产物在 `apps/*/out/renderer`，由 `apps/shell/src/main/index.ts:7127` 的 `installRendererProtocol` 映射到 `genoffice-app://<host>/index.html`（URL 构造见 `packages/electron-utils/src/renderer-scheme.ts:59` `rendererUrl`）。开发模式下上游用 5173–5178 六个端口。

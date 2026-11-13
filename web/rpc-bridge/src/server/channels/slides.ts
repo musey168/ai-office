@@ -1,3 +1,4 @@
+import { BridgeError } from '../../protocol'
 import type { ChannelHandler } from '../router'
 import type { TabRegistry } from '../tabs'
 
@@ -22,12 +23,20 @@ export interface SlidesOpenResult {
 }
 
 export interface SlidesChannelDeps {
-  engines: EngineRunner
+  engines: EngineRunner | null
   tabs: TabRegistry
 }
 
 export function createSlidesChannels(deps: SlidesChannelDeps): Record<string, ChannelHandler> {
   const { engines, tabs } = deps
+
+  /** The engine pool, or a clear error when it is not running. */
+  const requireEngines = (): EngineRunner => {
+    if (!engines) {
+      throw new BridgeError('not_available', 'the engine pool is not running')
+    }
+    return engines
+  }
 
   /** The engine session behind a tab — one open presentation per tab. */
   const sessionFor = (tabId: string | undefined): string => `slides:${tabId ?? 'detached'}`
@@ -37,7 +46,7 @@ export function createSlidesChannels(deps: SlidesChannelDeps): Record<string, Ch
     filePath: string,
     fitWidthPx: number,
   ): Promise<SlidesOpenResult | null> => {
-    return (await engines.run<SlidesOpenResult | null>('slides:open', [
+    return (await requireEngines().run<SlidesOpenResult | null>('slides:open', [
       sessionId,
       filePath,
       fitWidthPx,
@@ -54,6 +63,22 @@ export function createSlidesChannels(deps: SlidesChannelDeps): Record<string, Ch
       return openFor(sessionFor(tabId), filePath, Number(fitWidthPx) || 1280)
     },
 
+    /**
+     * A new, empty presentation.
+     *
+     * Upstream builds the blank deck in the main process and hands the
+     * render tree over; the deck is only written to disk when it is saved.
+     */
+    'slides:new-blank': async (ctx, ...args) => {
+      const fitWidthPx = Number(args[0]) || 1280
+      const sessionId = sessionFor(ctx.caller?.tabId)
+      const result = await requireEngines().run<SlidesOpenResult | null>('slides:new-blank', [
+        sessionId,
+        fitWidthPx,
+      ])
+      return result
+    },
+
     /** Open a deck by path. */
     'slides:open-path': async (_ctx, filePath, fitWidthPx) => {
       if (typeof filePath !== 'string' || !filePath) return null
@@ -63,7 +88,7 @@ export function createSlidesChannels(deps: SlidesChannelDeps): Record<string, Ch
     /** Write the deck back to its file. */
     'slides:save': async (ctx) => {
       const sessionId = sessionFor(ctx.caller?.tabId)
-      const result = (await engines.run<{ ok: boolean; path?: string; error?: string }>(
+      const result = (await requireEngines().run<{ ok: boolean; path?: string; error?: string }>(
         'slides:save',
         [sessionId],
       )) ?? { ok: false }

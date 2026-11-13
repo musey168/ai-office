@@ -1,8 +1,9 @@
-import { basename, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, join, resolve } from 'node:path'
 import type { WorkspaceStore } from '@ai-office/workspace-store'
 import { BridgeError } from '../../protocol'
 import type { ChannelHandler } from '../router'
 import type { TabRegistry } from '../tabs'
+import type { EngineRunner } from './slides'
 
 /**
  * The home screen: the file tree, the recents and the starred lists, and
@@ -130,10 +131,47 @@ export function createPendingOpens(): PendingOpens {
   }
 }
 
+/**
+ * The upstream's `NewFileOpts` (`apps/shell/src/shared/home-api.ts`): the
+ * folder the new file should land in.
+ */
+export interface NewFileOpts {
+  dir?: string
+}
+
+/**
+ * Write a file, picking a name that is not taken yet.
+ *
+ * Upstream's `uniquePathIn` does the same: a second "New PDF" must not
+ * overwrite the first one.
+ */
+async function writeUnique(
+  store: WorkspaceStore,
+  filePath: string,
+  bytes: Uint8Array,
+): Promise<string> {
+  const dir = dirname(filePath)
+  const ext = extname(filePath)
+  const stem = basename(filePath, ext)
+  let candidate = filePath
+  for (let index = 2; ; index += 1) {
+    try {
+      await store.stat(candidate)
+    } catch {
+      break
+    }
+    candidate = join(dir, `${stem} ${index}${ext}`)
+  }
+  await store.write(candidate, bytes)
+  return candidate
+}
+
 export interface HomeChannelDeps {
   store: WorkspaceStore
   tabs: TabRegistry
   pending: PendingOpens
+  /** The engine pool, for the formats whose blank file the main process writes. */
+  engines?: EngineRunner
   /** The UI language the shell renders in. */
   language?: string
   /** The theme the shell renders in. */
@@ -262,6 +300,58 @@ export function createHomeChannels(deps: HomeChannelDeps): Record<string, Channe
      */
     'home:open-path': async (_ctx, filePath) => {
       if (typeof filePath !== 'string' || !filePath) return
+      tabs.open(filePath, basename(filePath))
+      pending.put(filePath)
+    },
+
+    /**
+     * The "new file" cards on the home screen.
+     *
+     * Upstream opens a view with no file behind it; the file is created
+     * when the document is saved. Each app asks its own "consume pending"
+     * channel for the path it should open.
+     */
+    'home:new-doc': () => {
+      tabs.openBlank('docs', 'GenOffice Docs')
+    },
+
+    'home:new-slide': () => {
+      tabs.openBlank('slides', 'AI Slides')
+    },
+
+    'home:new-markdown': () => {
+      tabs.openBlank('markdown', 'AI Markdown')
+    },
+
+    'home:new-html': () => {
+      tabs.openBlank('html', 'AI HTML')
+    },
+
+    /**
+     * A new spreadsheet needs a blank .xlsx on disk before it opens —
+     * upstream writes one in the main process, because the save pipeline
+     * works on files. The workbook engine is not in the web port yet.
+     */
+    'home:new-sheet': async () => {
+      throw new BridgeError(
+        'not_available',
+        'the spreadsheet engine is not available in the web port yet',
+      )
+    },
+
+    /**
+     * A new PDF is a blank single-page file created up front — upstream
+     * does it in the main process, with the same pdf-lib the PDF module
+     * uses.
+     */
+    'home:new-pdf': async (_ctx, ...args) => {
+      if (!deps.engines) {
+        throw new BridgeError('not_available', 'the engine pool is not running')
+      }
+      const opts = args[0] as NewFileOpts | undefined
+      const dir = typeof opts?.dir === 'string' && opts.dir ? opts.dir : store.root
+      const { bytes } = await deps.engines.run<{ bytes: Uint8Array }>('pdf:blank', [])
+      const filePath = await writeUnique(store, join(dir, '未命名 PDF.pdf'), bytes)
       tabs.open(filePath, basename(filePath))
       pending.put(filePath)
     },

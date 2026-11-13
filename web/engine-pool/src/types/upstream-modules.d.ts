@@ -24,3 +24,10 @@ declare module 'bidi-js' {
   }
   export default bidi
 }
+
+declare namespace NodeJS {
+  interface Process {
+    /** The Electron resources directory; the worker points it at its own. */
+    resourcesPath: string
+  }
+}

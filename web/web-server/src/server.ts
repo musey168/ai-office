@@ -16,6 +16,9 @@ import {
   createAppChannels,
   createDocsChannels,
   createHomeChannels,
+  createHtmlChannels,
+  createMarkdownChannels,
+  createPdfChannels,
   createPendingOpens,
   createSlidesChannels,
   createTabChannels,
@@ -96,11 +99,21 @@ export function createOfficeServer(options: ServerOptions): OfficeServer {
     }),
   )
   router.registerAll(createAppChannels({}))
-  if (options.engines) {
-    router.registerAll(createSlidesChannels({ engines: options.engines, tabs }))
-  }
-  router.registerAll(createHomeChannels({ store, tabs, pending }))
+  // The slides channels are always there: without an engine pool they fail
+  // with a clear message instead of vanishing (a missing channel breaks the
+  // app's startup path).
+  router.registerAll(
+    createSlidesChannels({ engines: options.engines ?? null, tabs }),
+  )
+  router.registerAll(
+    createHomeChannels({ store, tabs, pending, engines: options.engines }),
+  )
   router.registerAll(createDocsChannels({ store, bytes: router.bytes, tabs, pending }))
+  router.registerAll(createMarkdownChannels({ store, tabs }))
+  router.registerAll(createHtmlChannels({ store, tabs }))
+  router.registerAll(
+    createPdfChannels({ store, tabs, bytes: router.bytes, engines: options.engines ?? null }),
+  )
 
   const server = createServer((req, res) => {
     void route(req, res).catch((error: unknown) => {
@@ -260,6 +273,9 @@ async function serveBridge(res: ServerResponse, bridgeRoot: string, name: string
     res.statusCode = 200
     res.setHeader('content-type', 'text/javascript; charset=utf-8')
     res.setHeader('content-length', String(body.byteLength))
+    // The bridge bundles have fixed names — they are not hashed — so a
+    // redeploy has to reach the browsers that already have them.
+    res.setHeader('cache-control', 'no-cache')
     res.end(body)
   } catch {
     json(res, 404, { error: 'no such bridge' })

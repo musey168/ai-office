@@ -1,6 +1,8 @@
 import { parentPort, workerData } from 'node:worker_threads'
 import { LocalWorkspaceStore } from '@ai-office/workspace-store'
-import { buildOpenResult, openDeck, saveDeck } from './slides'
+import { createBlankPdf, renderPageImage, renderPagePreview } from './pdf'
+import { installWasmLookup } from './pdfium'
+import { blankDeck, buildOpenResult, openDeck, saveDeck } from './slides'
 import { readSlideMedia } from '../../../apps/slides/src/main/session-state'
 import type { OpenedPptx } from '@genoffice/pptx-engine'
 import type { EngineRequest, EngineResponse } from './protocol'
@@ -26,6 +28,11 @@ interface Session {
   opened: OpenedPptx
 }
 
+// The upstream wasm lookup (PDFium) falls back to the Electron resources
+// directory; the worker has no Electron, so it is pointed at the worker's
+// own directory before anything renders.
+installWasmLookup()
+
 const roots = (workerData as WorkerData | undefined)?.workspaceRoots ?? []
 const store = new LocalWorkspaceStore({ roots })
 const sessions = new Map<string, Session>()
@@ -40,6 +47,13 @@ async function run(job: string, args: unknown[]): Promise<unknown> {
       return buildOpenResult(opened, filePath, fitWidthPx)
     }
 
+    case 'slides:new-blank': {
+      const [sessionId, fitWidthPx] = args as [string, number]
+      const opened = await blankDeck()
+      sessions.set(sessionId, { path: '', opened })
+      return buildOpenResult(opened, '', fitWidthPx)
+    }
+
     case 'slides:save': {
       const [sessionId] = args as [string]
       const session = sessions.get(sessionId)
@@ -47,6 +61,27 @@ async function run(job: string, args: unknown[]): Promise<unknown> {
       const bytes = await saveDeck(session.opened)
       await store.write(session.path, bytes)
       return { ok: true, path: session.path }
+    }
+
+    case 'pdf:blank': {
+      return { bytes: await createBlankPdf() }
+    }
+
+    case 'pdf:render-page': {
+      const [filePath, pageIndex, rect, scale] = args as [
+        string,
+        number,
+        [number, number, number, number],
+        number,
+      ]
+      const bytes = await store.read(filePath)
+      return { png: await renderPageImage(bytes, pageIndex, rect, scale) }
+    }
+
+    case 'pdf:render-preview': {
+      const [filePath, request] = args as [string, Parameters<typeof renderPagePreview>[1]]
+      const bytes = await store.read(filePath)
+      return { result: await renderPagePreview(bytes, request) }
     }
 
     case 'slides:media': {

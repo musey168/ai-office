@@ -99,6 +99,23 @@ worker 构建（`npm run build:worker`，vite ssr 目标）的三件特别的事
 字节由还持有该演示文稿的 worker 提供（上游的 `readSlideMedia`，`session-state.ts:606`）——
 **不用改上游一行**。
 
+## PDF：页面栅格化
+
+上游的 PDF 模块在**主进程**用 PDFium（`@embedpdf/pdfium`，WASM）把页面栅格化成 PNG，
+再交给渲染器画到 canvas 上。浏览器做不了这件事，所以引擎 worker 来做：
+
+- 空白 PDF：上游的 `blankPdfBuffer`（pdf-lib）✓；
+- 页面 PNG：上游的 `renderImagePng` / `renderPagePreviewPng` ✓。
+
+两处环境差异要处理：
+
+- **PDFium 的 wasm**：上游在开发时从 `node_modules` 找，打包后从
+  `process.resourcesPath/wasm` 找。worker 没有 Electron，于是把
+  `process.resourcesPath` 指到自己的目录，构建时把 wasm 拷到旁边 ✓。
+- **`nativeImage`**：上游用 Electron 的 `nativeImage` 把位图编码成 PNG。
+  服务端替身里自己写了一个最小 PNG 编码器（zlib + CRC ✓）——
+  出来的字节和 Electron 的一样 ✓。
+
 ## 已知耦合
 
 - `packages/cli/src/formats/xlsx.ts:45` 直接 import `apps/sheets/src/main/xlsx-sidecar-client`——上游的反向依赖（CLI 引 app 代码）。网页版**不改上游**，而是在 `web/engine-pool` 内引用同一个客户端文件，行为与上游 CLI 一致；
