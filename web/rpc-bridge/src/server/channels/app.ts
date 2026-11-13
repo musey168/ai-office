@@ -26,20 +26,20 @@ export const defaultAppSettings = (): AppSettings => ({
 })
 
 export interface AppChannelDeps {
-  settings: AppSettings
+  settings?: AppSettings
   /** Notifies the renderers that a preference changed. */
   onSettingsChanged?: (channel: string) => void
 }
 
 export function createAppChannels(deps: AppChannelDeps): Record<string, ChannelHandler> {
-  const { settings } = deps
+  const settings = deps.settings ?? defaultAppSettings()
   return {
     'app:get-language': () => settings.language,
     'app:get-theme': () => settings.theme,
     'app:get-document-theme': () => settings.documentTheme,
     'app:get-ai-panel-prefs': () => settings.aiPanelPrefs,
     'app:get-author-name': () => settings.authorName,
-    'app:auto-save-default': () => settings.autoSave,
+    'app:get-auto-save-default': () => settings.autoSave,
     'app:system-locale': () => settings.language,
     'docs:system-locale': () => settings.language,
   }

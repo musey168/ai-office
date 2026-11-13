@@ -160,15 +160,27 @@ move(src, dst) / delete(path) / stat(path) / search(query)
 
 | 上游能力 | 网页版处置 | 影响 |
 | --- | --- | --- |
-| 原生打开/保存对话框 | 换成服务端文件树 + 浏览器下载 | 操作步骤变多，能力不缺 |
+| 原生打开/保存对话框 | 首页文件树 + `docs:save-to` / `docs:save-new` | 操作步骤变多，能力不缺；`home:browse` 快捷卡片在网页版不可用 |
+| 原生右键菜单（标签、文件、编辑器） | 移除 | 标签栏与文件树的右键菜单在网页版没有；文件操作只能走工具栏 |
 | 本地打印（CUPS） | 浏览器打印；服务端 Chromium 出 PDF | 输出由浏览器打印管线决定 |
 | 屏幕录制 | 移除 | 上游功能，网页版无对应 |
-| 字体枚举与安装 | 服务端字体目录（与容器镜像绑定） | 幻灯片渲染字体与桌面不同，需在镜像里装齐字体 |
+| 字体枚举与安装 | 服务端字体目录（与容器镜像绑定） | 幻灯片渲染字体与桌面不同，需在镜像里装齐字体；文档编辑器的字体度量改走内置 stand-in 链 |
 | 分离窗口（拖出标签） | 移除 | 窗口管理不是网页版职责 |
 | macOS Vision OCR | 移除或改服务端 OCR | 上游仅 macOS |
 | 应用自动更新器 / 系统文件关联 | 移除（已在目标文档的非目标里） | 由部署流程接手 |
 | PDF 证书与签名 | 待定 | 依赖服务端证书体系 |
-| WebContentsView 分离窗口 | 移除 | 同上 |
+| WebContentsView 分离窗口 | **改为 iframe**（见下） | 编辑器在 shell 页面的 iframe 里，位置由 bridge 维护 |
+| 主进程弹窗（放弃修改、覆盖确认） | 改为服务端返回状态 + 渲染器自绘 | 需要渲染器侧的二段式对话 |
+
+**编辑器在页面里怎么活**（第一刀的实测结论）：
+
+上游的 shell renderer **不知道**编辑器的存在——编辑器是主进程摆在上层的原生 `WebContentsView`，
+renderer 只画标签栏和首页。浏览器没有这个机制，于是由 **bridge 脚本**在 shell 页面里挂一个
+iframe，位置对齐上游的内容区（标签栏 40px 以下），并跟着 `tabs:changed` 切换。
+上游 renderer 仍然零改动。
+
+**标签与窗口的关系**：Electron 用 `event.sender.id` 把文档交给对应的窗口；浏览器没有这个 id，
+页面自己声明「我是哪个 app、属于哪个 tab」（`RpcContext`），服务端据此定位。
 
 移除项须在能力清单里显式标注，不能悄悄消失——目标文档 S1 要求「每项既有能力都能用」，上表就是这份对照表的入口。
 
@@ -189,6 +201,10 @@ packages/*/              ← 上游文件，原则上不改
 - `apps/*/src/shared/ipc.ts`——只跟上游改，不自己改；
 - 构建配置（`electron.vite.config.ts` → 增加 web 产物），按 app 逐个增加；
 - **docs 的 CSP**（`apps/docs/src/renderer/index.html:6-8`）——`img-src` / `connect-src` 里写死了 `genoffice-docx-media:`，网页版必须改成服务端 URL，否则文档里的图片全部加载不出来。这是一处**硬阻塞**，不是可选优化；
+  - **实测结论**：同源之后 CSP 本身不用改（`'self'` 已经覆盖 `/media/<token>` 与 `/media/lazy/…`）；
+    真正的阻塞是 **URL 的 scheme 写死在引擎里**（`packages/docx-engine/src/lazy-media.ts:38` `lazyMediaUrl()`），
+    浏览器取不到 `genoffice-docx-media://<hash>/<part>`。修法是把 base 变成可配置的（默认值保持上游行为），
+    这需要把 `packages/docx-engine` 登记为新的插入点。
 - **headless 分支**——渲染服务需要在 renderer 里区分「普通渲染」与「无头导出」，上游已有 `--headless-export` 的机制（`packages/electron-utils/src/headless-export.ts:235` `runHeadlessRendererExport`），网页版复用同一机制。
 
 **禁改清单**要单独成文，列明上游目录里「改了会与上游冲突、且可以在 `web/` 内解决」的文件。

@@ -97,6 +97,31 @@ tags: [web, ipc]
 | AI 流式回合 | `POST /ai/stream` 发起 + `GET /ai/stream/:requestId`（SSE） | 见「AI 通道」 |
 | 长耗时任务 | `POST /rpc/:channel` 返回 `{taskId}` + `GET /tasks/:taskId` | 见「长耗时通道」 |
 
+### 页面上下文：浏览器没有 `event.sender.id`
+
+Electron 用 `event.sender.id`（发起调用的 web contents 的 id）把文档交给对应的窗口——
+上游的 `pendingWindowOpens` 就是一张按 id 索引的表。浏览器没有这个 id，
+所以**页面自己声明**自己是谁：`RpcContext { app, tabId }`。
+
+- `app` 从路径得出（`/app/docs/` → `docs`）；
+- `tabId` 从查询参数得出（`/app/docs/?tab=tab-1`）；
+- 上下文走请求信封（`{ args, ctx }`），**不混进通道参数**——通道参数必须与上游一字不差。
+
+### 标签表在服务端
+
+上游的标签表在主进程里（`apps/shell/src/main/tab-manager.ts`），shell renderer 通过
+`tabs:list` 读取、`tabs:changed` 接收变化。网页版没有主进程，标签表因此在服务端
+（`src/server/tabs.ts`）：形状与上游 `TabSummary` 一致，shell 的标签栏照常渲染。
+
+`home:open-path` 在上游是「打开文档」；这里它**开一个标签**，
+标签带着文件路径，编辑器 iframe 凭 `tabId` 找到该打开什么。
+
+### 编辑器在 shell 页面里怎么活
+
+上游的 shell renderer 里**没有 iframe**——编辑器是主进程摆在上层的原生 `WebContentsView`。
+浏览器没有这个机制，于是 **bridge 脚本**（`src/host.ts`）在 shell 页面里挂一个 iframe，
+盖住标签栏以下的内容区，跟着 `tabs:changed` 切换 `src`。上游 renderer 零改动。
+
 ### 字节：一次性 token 与一次性 URL
 
 Electron 的 IPC 用结构化克隆，能直接传 `ArrayBuffer`；JSON 不能。两条方向各有做法：
@@ -201,13 +226,18 @@ shim 把它转成 token，服务端还原成字节交给存储层。
 1. 上游 renderer 文件零改动，只在入口挂载本模块的 bridge 脚本；
 2. 通道名与全局对象名与上游一一对应，不改名、不合并；
 3. 路由表覆盖上游全部约 600 个通道——**未实现的通道必须显式报错，不得静默返回 undefined**；
+   （通道级失败走 `200 + {ok:false, error}` 的信封：请求本身被理解了，失败的是通道；
+   只有请求不合法才是 4xx）
 4. API 类型只从上游 `shared/` 引入，本模块不定义第二套；
 5. SSE 必须带 ping 保活，与上游 240 秒看门狗对齐；
 6. 本模块不得直接访问文件系统；
 7. 任何跨标签推送都必须带 tabId；
 8. **通道契约只有一份**——上游的 preload 源码；本模块不手写通道表，也不改上游 preload；
 9. 字节不进 JSON：走一次性 token（入站）与一次性 URL（出站）；
-10. 服务端访问文件一律经 `web/workspace-store`，不得绕过围栏。
+10. 服务端访问文件一律经 `web/workspace-store`，不得绕过围栏；
+11. **通道参数与上游一字不差**——上下文、tab、session 一律走信封或旁路，不得混进参数；
+12. 上游 renderer 在启动路径上 `Promise.all` 的通道**必须能 resolve**：
+    缺一个就会让整个 `Promise.all` reject，文档直接回落到空白页（实测：`docs:consume-new-blank`）。
 
 ## 风险
 

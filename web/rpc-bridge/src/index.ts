@@ -20,3 +20,26 @@ export {
   type ChannelHandler,
   type ChannelRouterOptions,
 } from './server/router'
+export { createAppChannels, type AppChannelDeps } from './server/channels/app'
+export {
+  createDocsChannels,
+  type DocsChannelDeps,
+  type OpenDocxResult,
+  type SaveResult,
+} from './server/channels/docs'
+export {
+  createHomeChannels,
+  createPendingOpens,
+  type FolderListing,
+  type HomeChannelDeps,
+  type PendingOpens,
+} from './server/channels/home'
+export { createTabChannels, type TabChannelDeps } from './server/channels/tabs'
+export {
+  TabRegistry,
+  tabKindForPath,
+  type TabKind,
+  type TabSummary,
+} from './server/tabs'
+export { EditorHost, pageContext } from './host'
+export type { RpcContext } from './protocol'

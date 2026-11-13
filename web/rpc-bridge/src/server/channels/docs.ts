@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
 import { basename } from 'node:path'
-import type { WorkspaceStore } from '@ai-office/workspace-store'
+import type { FileSnapshot, WorkspaceStore } from '@ai-office/workspace-store'
 import type { ByteStore } from '../bytes'
 import type { ChannelHandler } from '../router'
+import type { TabRegistry } from '../tabs'
 import type { PendingOpens } from './home'
 
 /**
@@ -19,6 +20,8 @@ import type { PendingOpens } from './home'
 export interface DocsChannelDeps {
   store: WorkspaceStore
   bytes: ByteStore
+  /** The tabs the shell opened — a docs page belongs to one of them. */
+  tabs?: TabRegistry
   /** Where the one-time media URLs point. Same-origin by default. */
   mediaBaseUrl?: string
   /** Recently opened paths, newest first. */
@@ -51,9 +54,21 @@ export function createDocsChannels(deps: DocsChannelDeps): Record<string, Channe
   const { store, bytes } = deps
   const mediaBase = deps.mediaBaseUrl ?? '/media'
 
+  /**
+   * The disk state of every open document, so a save can tell whether the
+   * file changed behind the editor's back — upstream's `diskChangedExternally`.
+   */
+  const snapshots = new Map<string, FileSnapshot>()
+
   const openDocx = async (filePath: string): Promise<OpenDocxResult | null> => {
     const content = await store.read(filePath)
     const token = bytes.put(content)
+    try {
+      snapshots.set(filePath, await store.snapshot(filePath))
+    } catch {
+      // A file that cannot be snapshotted is still readable; the external
+      // modification check simply has nothing to compare against.
+    }
     return {
       path: filePath,
       name: basename(filePath),
@@ -65,14 +80,25 @@ export function createDocsChannels(deps: DocsChannelDeps): Record<string, Channe
   const saveTo = async (
     filePath: string,
     data: unknown,
-    options: { overwrite?: boolean } = {},
+    options: { overwrite?: boolean; checkExternal?: boolean } = {},
   ): Promise<SaveResult> => {
     const bytes = asBytes(data)
     if (!bytes) {
       return { ok: false, error: 'the document bytes are missing' }
     }
+    if (options.checkExternal && (await store.isExternallyModified(snapshots.get(filePath)))) {
+      // Upstream asks the user whether to overwrite; the web version has no
+      // native dialog, so the renderer draws the question itself and calls
+      // back with `overwrite`.
+      return { ok: false, reason: 'external-modified' }
+    }
     try {
       await store.write(filePath, bytes)
+      try {
+        snapshots.set(filePath, await store.snapshot(filePath))
+      } catch {
+        /* the write succeeded; only the follow-up snapshot failed */
+      }
       return { ok: true, path: filePath }
     } catch (error) {
       const code = (error as { code?: string }).code
@@ -93,19 +119,51 @@ export function createDocsChannels(deps: DocsChannelDeps): Record<string, Channe
       return openDocx(filePath)
     },
 
-    /** The shell tab flow: the document opened from the home screen. */
-    'docs:consume-pending-open': async () => {
-      const filePath = deps.pending?.take()
+    /**
+     * The shell tab flow: the document opened from the home screen.
+     *
+     * The page says which tab it belongs to, and the tab knows the file —
+     * the same handoff upstream does through the main process' pending-window
+     * map.
+     */
+    'docs:consume-pending-open': async (ctx) => {
+      const tabId = ctx.caller?.tabId
+      const tab = tabId ? deps.tabs?.get(tabId) : undefined
+      const filePath = tab?.filePath ?? deps.pending?.take()
       if (!filePath) return null
       return openDocx(filePath)
     },
+
+    /**
+     * The one-shot flags the renderer consumes on boot.
+     *
+     * Upstream's boot awaits these three **together** with
+     * `consumePendingOpenDocx` in one `Promise.all` — a rejection in any of
+     * them drops the document and lands on a blank page. They must resolve,
+     * even when there is nothing pending.
+     */
+    'docs:consume-new-blank': () => null,
+    'docs:consume-ai-doc-content': () => null,
+    'docs:consume-headless-export': () => null,
+
+    /**
+     * The vertical metrics of the fonts installed on the machine. A browser
+     * has no installed-font index; the renderer falls back to its own
+     * stand-in chains when this answers with nothing.
+     */
+    'docs:font-metrics': () => null,
+
+    /** The password prompts to discard when a document closes. */
+    'docs:discard-password-intents': () => undefined,
 
     /** Save back to the file it came from. */
     'docs:save': async (_ctx, filePath, data, auto) => {
       if (typeof filePath !== 'string' || !filePath) {
         return { ok: false, error: 'no path to save to' }
       }
-      return saveTo(filePath, data)
+      // An automatic save never overwrites somebody else's change: upstream
+      // refuses it outright, and the document stays dirty.
+      return saveTo(filePath, data, { checkExternal: true })
     },
 
     /** Save to an explicit target (used by the MCP bridge). */

@@ -7,7 +7,8 @@
   "description": "Electron IPC equivalent for the AI Office web port: browser-side shim + server-side channel router",
   "exports": {
     ".": "./src/index.ts",
-    "./shim": "./src/shim.ts"
+    "./shim": "./src/shim.ts",
+    "./build/upstream-resolver": "./src/build/upstream-resolver.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

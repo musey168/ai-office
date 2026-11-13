@@ -53,8 +53,27 @@ tags: [web, http]
 | `GET /events` | SSE 事件流（主进程推送） | `web/rpc-bridge` |
 | `POST /ai/stream` + `GET /ai/stream/:requestId` | AI 流式回合 | `web/ai-service` |
 | `GET /tasks/:taskId` | 长耗时任务状态与结果 | `web/engine-pool` |
+| `GET /bridge/<app>.js` | 编译好的上游 preload（通道契约的唯一一份） | `web/rpc-bridge` |
+| `GET /media/<token>` | 文档字节的一次性 URL（上游 `genoffice-docx-media://handoff/<uuid>` 的同源替身） | `web/rpc-bridge` |
+| `POST /bytes` + `GET /bytes/<token>` | 二进制出入（上传拿 token，取回即销毁） | `web/rpc-bridge` |
 | `GET /health` | 健康检查 | 本模块 |
 | MCP 通道（`POST /mcp`、`/files/*`） | 上游 CLI/MCP 的 HTTP 形态 | `web/engine-pool` 复用上游 `mcp/http.ts` |
+
+## 上游 renderer 怎么变成浏览器 bundle
+
+上游的 renderer 是 Vite + React 应用，构建走 `electron-vite`（产物在 `apps/<app>/out/renderer`）。
+网页版不需要 Electron 那一层，只要 renderer 的那部分，所以**用 vite 直接编**：
+
+- 入口是上游的 `apps/<app>/src/renderer/index.html`，**源码一个字不改**；
+- 唯一改动是 **base**：`/app/<app>/`，让应用能待在路径前缀下（上游开发模式是六个不同端口、
+  生产是六个不同 origin，网页版统一到一个 origin）；
+- 产物落在 `web/web-server/dist/<app>/`，**不入库**（`dist/` 被忽略）；
+- `@genoffice/*` 的子路径按规则解析到上游 checkout 的源码（与上游自己的 vite 配置同思路），
+  上游新增子路径不必改我们的配置；
+- 产物里**没有 electron 依赖**——renderer 本来就不 import electron。
+
+shell 的 renderer 是多入口（`index` / `update` / `pdf-password`）；第一刀只编 `index`，
+另两个是 Electron 专有窗口（自动更新、PDF 密码框），随各自的切片补。
 
 ## 静态资源
 
@@ -76,6 +95,10 @@ tags: [web, http]
 - **只有 PDF 编辑器有额外资源**——docs renderer 自带的字体（Aptos / Caladea / Cambria 等，`apps/docs/src/renderer/fonts/*.ttf`）已经打包成 hashed assets，随 bundle 走，不需要单独分发；
 - `GENOFFICE_PDFIUM_WASM` 指向的 pdfium.wasm（上游 `packages/cli/src/resources.ts:48`）同样要随服务分发；
 - Vite 默认产物名是 `assets/index-<hash>.js`（各 `electron.vite.config.ts` 未改 `output`），bundle 文件名带 hash → 可长期缓存；`index.html` 不缓存；
+- **bridge 脚本由服务端注入**：在 HTML 里第一个 module script 之前插入
+  `<script type="module" src="/bridge/<app>.js">`。module script 按文档顺序执行，
+  所以 bridge 先跑，渲染器启动时 `window.desktop` / `window.aiOffice` 已经就位；
+  上游 HTML 文件本身不动；
 - shell renderer 是多入口（`index` / `update` / `pdf-password`，见 `apps/shell/electron.vite.config.ts:30-36`），网页版要一并产出。
 
 **上游没有静态文件服务器**——`web-server` 的静态层要从零写。唯一值得复用的是 `packages/electron-utils/src/renderer-scheme.ts:81` `resolveRendererFile()` 的路径逃逸防护（pathname 长度 ≤ 4096、禁 `\0`、`\` 归一为 `/`、必须落在 root 内），以及 `packages/cli/src/mcp/files.ts:50` 的 `safeName`。
@@ -92,6 +115,15 @@ tags: [web, http]
 - 错误响应结构统一：通道未实现必须**显式报错**并说明原因，不得静默返回空结果——这是 `web/rpc-bridge` 的不变量之一；
 - 长耗时操作不在 HTTP 连接上阻塞等待，改为提交任务 + 轮询 `GET /tasks/:taskId`。
 
+## 错误与状态码
+
+- **通道级失败**（通道未实现、参数不对、文件不存在）→ `200` + `{ok:false, error:{code, message}}`。
+  请求本身是被理解了的，失败的是通道；把它做成 4xx 只会让浏览器控制台堆满红线，
+  而上游的 renderer 并不区分这两种失败。
+- **请求本身不合法**（body 不是 JSON）→ `400`。
+- **路由不存在** → `404` + `{error}`（上游 MCP 的形状）。
+- 静态资源找不到 → `404` + `{error}`。
+
 ## 不变量
 
 1. 只有一个对外监听面，浏览器可见的一切都从这里出；
@@ -100,7 +132,9 @@ tags: [web, http]
 4. SSE 响应禁用代理缓冲；
 5. 请求体有明确上限；
 6. 长耗时操作不阻塞 HTTP 连接；
-7. 本模块不实现业务逻辑、不碰文件、不调引擎。
+7. 本模块不实现业务逻辑、不碰文件、不调引擎；
+8. 上游 HTML 不改：bridge 的注入发生在响应时；
+9. 路径前缀只有一个：`/app/<app>/`，与上游六个 origin 的差别由 base 参数消化。
 
 ## 风险
 

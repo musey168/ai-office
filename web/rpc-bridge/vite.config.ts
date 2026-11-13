@@ -1,6 +1,6 @@
-import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig } from 'vite'
+import { upstreamWorkspaceResolver } from './src/build/upstream-resolver'
 
 /**
  * Builds the browser-side bridge: one bundle per app, from the **upstream**
@@ -10,34 +10,6 @@ import { defineConfig, type Plugin } from 'vite'
  * argument shape and return shape comes from there. We do not restate it.
  */
 const APPS = ['docs', 'sheets', 'slides', 'pdf', 'markdown', 'html', 'shell'] as const
-
-const PACKAGES_DIR = resolve(__dirname, '../../packages')
-
-/**
- * Resolve `@genoffice/<pkg>` and `@genoffice/<pkg>/<sub>` against the upstream
- * checkout's sources, the way upstream's own vite config does. Doing it by
- * rule rather than by an alias list means a new upstream subpath resolves
- * without touching this file.
- */
-function upstreamWorkspaceResolver(): Plugin {
-  return {
-    name: 'genoffice-upstream-resolver',
-    enforce: 'pre',
-    resolveId(source) {
-      if (!source.startsWith('@genoffice/')) return null
-      const rest = source.slice('@genoffice/'.length)
-      const slash = rest.indexOf('/')
-      const pkg = slash === -1 ? rest : rest.slice(0, slash)
-      const sub = slash === -1 ? 'index' : rest.slice(slash + 1)
-      const candidates = [
-        resolve(PACKAGES_DIR, pkg, 'src', `${sub}.ts`),
-        resolve(PACKAGES_DIR, pkg, 'src', sub, 'index.ts'),
-        resolve(PACKAGES_DIR, pkg, 'src', `${sub}.tsx`),
-      ]
-      return candidates.find((candidate) => existsSync(candidate)) ?? null
-    },
-  }
-}
 
 export default defineConfig({
   plugins: [upstreamWorkspaceResolver()],

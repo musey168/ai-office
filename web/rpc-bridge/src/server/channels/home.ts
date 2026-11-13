@@ -1,22 +1,30 @@
-import { basename, dirname, extname, join } from 'node:path'
+import { basename, extname, join, resolve } from 'node:path'
 import type { WorkspaceStore } from '@ai-office/workspace-store'
+import { BridgeError } from '../../protocol'
 import type { ChannelHandler } from '../router'
+import type { TabRegistry } from '../tabs'
 
 /**
- * The home screen's file tree: roots, listings, folder creation, and opening
- * a document.
+ * The home screen: the file tree, the recents and the starred lists, and
+ * opening a document.
  *
- * The shapes follow upstream's `home-api.ts` (`FolderRoot`, `FolderListing`,
- * `FolderEntry`, `FileEntry`) — the renderers consume them unchanged.
+ * Every shape here is upstream's (`apps/shell/src/shared/home-api.ts`) and
+ * every listing rule is upstream's (`apps/shell/src/main/folder-tree.ts`) —
+ * the shell renderer consumes them unchanged, so a field renamed upstream
+ * would silently empty a panel here.
  */
 
-/** Document extensions the home screen lists. */
-const DOCUMENT_EXTENSIONS = new Set([
-  'docx', 'doc', 'dotx', 'docm',
-  'xlsx', 'xlsm', 'xlsb', 'csv',
-  'pptx', 'pptm',
-  'pdf', 'md', 'markdown', 'html', 'htm',
+/** Document extensions the home screen lists — upstream's `TREE_FILE_EXTENSIONS`. */
+const TREE_FILE_EXTENSIONS = new Set([
+  'docx', 'doc', 'xlsx', 'xlsm', 'xls', 'csv', 'tsv', 'ods', 'ots',
+  'pptx', 'ppt', 'odt', 'ott', 'hwpx', 'hwp', 'odp', 'otp',
+  'pdf', 'md', 'markdown', 'txt', 'json', 'html', 'htm',
 ])
+
+/** Folders the tree never shows. */
+const HIDDEN_DIR_NAMES = new Set(['node_modules', '__macosx'])
+/** Files the tree never shows. */
+const HIDDEN_FILE_NAMES = new Set(['thumbs.db', 'desktop.ini'])
 
 export interface FolderRoot {
   path: string
@@ -50,6 +58,50 @@ export interface FolderListing {
   missing?: boolean
 }
 
+export interface RecentEntry {
+  path: string
+  name: string
+  ext: string
+  mtimeMs: number
+  sizeBytes: number
+  starred: boolean
+  group?: string
+  missing?: boolean
+}
+
+export interface RecentPage {
+  entries: RecentEntry[]
+  total: number
+  totalAll: number
+}
+
+export interface AccountStatus {
+  loggedIn: boolean
+  email?: string
+  creditBalance?: number
+}
+
+export interface RenameResult {
+  ok: boolean
+  path?: string
+  error?: string
+}
+
+/**
+ * Dotfiles, Office lock files and OS junk stay out of the tree — upstream's
+ * `isHiddenEntry`.
+ */
+function isHiddenEntry(name: string, isDir: boolean): boolean {
+  if (name.startsWith('.') || name.startsWith('~$')) return true
+  const lower = name.toLowerCase()
+  if (isDir) return HIDDEN_DIR_NAMES.has(lower)
+  return HIDDEN_FILE_NAMES.has(lower)
+}
+
+function isSupportedTreeFile(name: string): boolean {
+  return TREE_FILE_EXTENSIONS.has(extname(name).slice(1).toLowerCase())
+}
+
 export interface PendingOpens {
   /** Remember a document the home screen asked to open. */
   put(filePath: string): void
@@ -59,9 +111,9 @@ export interface PendingOpens {
 }
 
 /**
- * The web version has no tab manager: the shell's "open this document" is a
- * slot the next docs page consumes, exactly like upstream's pending-window
- * handoff.
+ * The fallback handoff for a docs page that is not running inside a tab —
+ * upstream keeps the pending path in the main process, keyed by the web
+ * contents id.
  */
 export function createPendingOpens(): PendingOpens {
   let pending: string | undefined
@@ -80,26 +132,61 @@ export function createPendingOpens(): PendingOpens {
 
 export interface HomeChannelDeps {
   store: WorkspaceStore
+  tabs: TabRegistry
   pending: PendingOpens
+  /** The UI language the shell renders in. */
+  language?: string
+  /** The theme the shell renders in. */
+  theme?: string
   /** Recently opened documents, newest first. */
   recents?: string[]
-  /** File search, wired up by the file-index module when it exists. */
-  search?: (query: unknown) => unknown
 }
 
 export function createHomeChannels(deps: HomeChannelDeps): Record<string, ChannelHandler> {
-  const { store, pending } = deps
+  const { store, tabs, pending } = deps
+  const language = deps.language ?? 'zh'
+  const theme = deps.theme ?? 'system'
 
-  const hasSubfolders = async (dir: string): Promise<boolean> => {
+  /**
+   * The store speaks workspace-relative paths; the shell's renderer speaks
+   * absolute ones — upstream's `FolderEntry.path` is the real path on disk,
+   * and the renderer hands it straight back to the server when opening a
+   * file.
+   */
+  const absolute = (relativePath: string): string => resolve(store.root, relativePath)
+
+  const visibleSubfolders = async (dir: string): Promise<boolean> => {
     try {
       const entries = await store.list(dir)
-      return entries.some((entry) => entry.kind === 'directory')
+      return entries.some(
+        (entry) => entry.kind === 'directory' && !isHiddenEntry(entry.name, true),
+      )
     } catch {
       return false
     }
   }
 
   return {
+    /**
+     * The language of the shell UI. The shell's renderer awaits this before
+     * its first paint and does **not** catch the failure — without this
+     * channel the whole page stays blank.
+     */
+    'home:get-language': () => language,
+
+    'home:get-theme': () => theme,
+
+    /**
+     * Whether the first-run walkthrough has been seen. The web version starts
+     * with it out of the way: the walkthrough is a desktop-app onboarding,
+     * and it would cover the file tree.
+     */
+    'home:onboarding-seen': () => true,
+    'home:set-onboarding-seen': () => true,
+
+    /** The "tell us you like it" invitation — never shown in the web version. */
+    'home:star-prompt-should-show': () => ({ show: false, docOpens: 0 }),
+
     /** The folders the home screen shows at the top. */
     'home:folder-roots': async () => {
       const root = store.root
@@ -128,19 +215,20 @@ export function createHomeChannels(deps: HomeChannelDeps): Record<string, Channe
       const folders: FolderEntry[] = []
       const files: FileEntry[] = []
       for (const entry of entries) {
+        if (isHiddenEntry(entry.name, entry.kind === 'directory')) continue
         if (entry.kind === 'directory') {
           folders.push({
-            path: entry.path,
+            path: absolute(entry.path),
             name: entry.name,
             mtimeMs: entry.mtimeMs,
-            hasSubfolders: await hasSubfolders(entry.path),
+            hasSubfolders: await visibleSubfolders(entry.path),
           })
           continue
         }
-        const ext = extname(entry.name).replace(/^\./, '').toLowerCase()
-        if (!DOCUMENT_EXTENSIONS.has(ext)) continue
+        if (!isSupportedTreeFile(entry.name)) continue
+        const ext = extname(entry.name).slice(1).toLowerCase()
         files.push({
-          path: entry.path,
+          path: absolute(entry.path),
           name: entry.name,
           ext,
           mtimeMs: entry.mtimeMs,
@@ -148,7 +236,7 @@ export function createHomeChannels(deps: HomeChannelDeps): Record<string, Channe
           starred: false,
         })
       }
-      folders.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+      folders.sort((a, b) => a.name.localeCompare(b.name))
       files.sort((a, b) => b.mtimeMs - a.mtimeMs)
       return { dir: target, folders, files } satisfies FolderListing
     },
@@ -156,27 +244,102 @@ export function createHomeChannels(deps: HomeChannelDeps): Record<string, Channe
     /** Create a folder inside the tree. */
     'home:folder-create': async (_ctx, parent, name) => {
       if (typeof parent !== 'string' || typeof name !== 'string' || !name) {
-        return { ok: false, error: 'a folder name is required' }
+        return { ok: false, error: 'a folder name is required' } satisfies RenameResult
       }
       const target = join(parent, name)
       try {
         await store.createDirectory(target)
-        return { ok: true, path: target }
+        return { ok: true, path: target } satisfies RenameResult
       } catch (error) {
-        return { ok: false, error: (error as Error).message }
+        return { ok: false, error: (error as Error).message } satisfies RenameResult
       }
     },
 
-    /** Open a document — the shell hands it to the next docs page. */
+    /**
+     * Open a document. Upstream's handler opens the document and returns
+     * nothing; here it opens a tab, and the shell's page mounts the editor
+     * for that tab.
+     */
     'home:open-path': async (_ctx, filePath) => {
-      if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'no path' }
+      if (typeof filePath !== 'string' || !filePath) return
+      tabs.open(filePath, basename(filePath))
       pending.put(filePath)
-      return { ok: true }
     },
 
-    'home:recents': () => ({ entries: [], total: 0, totalAll: 0 }),
-    'home:starred': () => ({ entries: [], total: 0, totalAll: 0 }),
+    'home:recents': async () => {
+      const entries = await recentEntries(store, deps.recents ?? [], absolute)
+      return { entries, total: entries.length, totalAll: entries.length } satisfies RecentPage
+    },
+
+    'home:starred': async () => ({
+      entries: [],
+      total: 0,
+      totalAll: 0,
+    } satisfies RecentPage),
+
     'home:starred-groups': () => [],
-    'home:account-status': () => ({ signedIn: false }),
+
+    /** The Genspark account state — the web version has none. */
+    'home:account-status': () => ({ loggedIn: false } satisfies AccountStatus),
+
+    /**
+     * The native "open a file" dialog. A browser cannot ask the server's
+     * disk for a path — the file tree is the way in.
+     */
+    'home:browse': async () => {
+      throw new BridgeError(
+        'not_available',
+        'the native file dialog does not exist in the browser; use the file tree',
+      )
+    },
+
+    /** "Show in file manager" — a desktop-only affordance. */
+    'home:reveal-path': async () => {
+      throw new BridgeError('not_available', 'there is no file manager to reveal a path in')
+    },
+
+    /** "Add a folder root" — upstream opens the native folder picker. */
+    'home:folder-root-add': async () => {
+      throw new BridgeError(
+        'not_available',
+        'the native folder picker does not exist in the browser',
+      )
+    },
   }
+}
+
+/** The recents list, newest first, with upstream's `RecentEntry` shape. */
+async function recentEntries(
+  store: WorkspaceStore,
+  paths: string[],
+  absolute: (relativePath: string) => string,
+): Promise<RecentEntry[]> {
+  const entries: RecentEntry[] = []
+  for (const path of paths) {
+    try {
+      const meta = await store.stat(path)
+      if (!meta.isFile) continue
+      entries.push({
+        path: absolute(meta.path),
+        name: meta.name,
+        ext: extname(meta.name).slice(1).toLowerCase(),
+        mtimeMs: meta.mtimeMs,
+        sizeBytes: meta.size,
+        starred: false,
+      })
+    } catch {
+      // A file that vanished since it was opened is still listed upstream,
+      // marked `missing`.
+      entries.push({
+        path: absolute(path),
+        name: basename(path),
+        ext: extname(path).slice(1).toLowerCase(),
+        mtimeMs: 0,
+        sizeBytes: 0,
+        starred: false,
+        missing: true,
+      })
+    }
+  }
+  return entries
 }

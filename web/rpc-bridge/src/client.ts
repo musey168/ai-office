@@ -3,6 +3,7 @@ import {
   isByteToken,
   toArrayBuffer,
   toBytes,
+  type RpcContext,
   type RpcResponse,
 } from './protocol'
 
@@ -12,6 +13,12 @@ export interface BridgeClientOptions {
   fetchImpl?: typeof fetch
   /** Factory for the event stream; defaults to the global `EventSource`. */
   eventSourceFactory?: (url: string) => EventSource
+  /**
+   * Where the calling page is. Electron uses the web contents id for this;
+   * the browser states it, so the server can tell the pages of a window
+   * apart.
+   */
+  context?: () => RpcContext | undefined
 }
 
 /**
@@ -27,6 +34,7 @@ export class BridgeClient {
   private readonly baseUrl: string
   private readonly fetchImpl: typeof fetch
   private readonly eventSourceFactory: (url: string) => EventSource
+  private readonly contextProvider: (() => RpcContext | undefined) | undefined
   private readonly listeners = new Map<string, Set<(event: unknown, ...args: unknown[]) => void>>()
   private source: EventSource | null = null
   private subscribedChannels = ''
@@ -36,6 +44,7 @@ export class BridgeClient {
     this.fetchImpl = options.fetchImpl ?? ((...args) => fetch(...args))
     this.eventSourceFactory =
       options.eventSourceFactory ?? ((url) => new EventSource(url))
+    this.contextProvider = options.context
   }
 
   /** Request-应答：对应 `ipcRenderer.invoke`。 */
@@ -44,7 +53,7 @@ export class BridgeClient {
     const response = await this.fetchImpl(`${this.baseUrl}/rpc/${encodeURIComponent(channel)}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ args: encoded }),
+      body: JSON.stringify({ args: encoded, ctx: this.currentContext() }),
     })
     const payload = (await response.json()) as RpcResponse
     if (!payload.ok) {
@@ -63,7 +72,11 @@ export class BridgeClient {
         this.fetchImpl(`${this.baseUrl}/rpc/${encodeURIComponent(channel)}`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ args: encoded, fireAndForget: true }),
+          body: JSON.stringify({
+            args: encoded,
+            ctx: this.currentContext(),
+            fireAndForget: true,
+          }),
         }),
       )
       .catch(() => {
@@ -133,6 +146,10 @@ export class BridgeClient {
       // ever reads the payload, so a plain object stands in.
       listener({ senderId: 0 }, ...args)
     }
+  }
+
+  private currentContext(): RpcContext | undefined {
+    return this.contextProvider?.()
   }
 
   private async encodeArgs(args: unknown[]): Promise<unknown[]> {

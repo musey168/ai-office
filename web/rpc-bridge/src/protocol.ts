@@ -23,6 +23,25 @@ export function isByteToken(value: unknown): value is ByteToken {
 /** Request body of `POST /rpc/:channel`. */
 export interface RpcRequest {
   args: unknown[]
+  /**
+   * Which page the call came from.
+   *
+   * Electron has `event.sender.id` — the id of the web contents that made
+   * the call — and the main process uses it to hand a document to the right
+   * window. The browser has no such id, so the page states which upstream
+   * app it is and which tab it belongs to.
+   */
+  ctx?: RpcContext
+  /** `ipcRenderer.send` semantics: the caller does not wait for a result. */
+  fireAndForget?: boolean
+}
+
+/** Where a call came from. */
+export interface RpcContext {
+  /** The upstream app the calling page is: `shell`, `docs`, `sheets`, … */
+  app?: string
+  /** The tab the calling page belongs to (the shell's tab id). */
+  tabId?: string
 }
 
 /** Response body of `POST /rpc/:channel`. */

@@ -3,6 +3,7 @@ import {
   isBinary,
   isByteToken,
   toBytes,
+  type RpcContext,
   type RpcEvent,
 } from '../protocol'
 import { ByteStore } from './bytes'
@@ -11,6 +12,8 @@ import { EventHub } from './events'
 export interface ChannelContext {
   /** The channel that was called. */
   channel: string
+  /** Which page called — the browser's stand-in for `event.sender.id`. */
+  caller?: RpcContext
   /** Push an event back to the caller (and anyone else listening). */
   publish: (channel: string, args: unknown[]) => void
 }
@@ -41,6 +44,8 @@ export class ChannelRouter {
   readonly events: EventHub
   private readonly handlers = new Map<string, ChannelHandler>()
   private readonly onMissing: (channel: string) => void
+  /** The channels already reported as missing — one line each is enough. */
+  private readonly missing = new Set<string>()
 
   constructor(options: ChannelRouterOptions = {}) {
     this.bytes = options.bytes ?? new ByteStore()
@@ -69,31 +74,40 @@ export class ChannelRouter {
   }
 
   /** Request-应答：the counterpart of `ipcRenderer.invoke`. */
-  async invoke(channel: string, args: unknown[]): Promise<unknown> {
+  async invoke(channel: string, args: unknown[], caller?: RpcContext): Promise<unknown> {
     const handler = this.handlers.get(channel)
     if (!handler) {
-      this.onMissing(channel)
+      this.reportMissing(channel)
       throw new BridgeError('unknown_channel', `no handler for channel "${channel}"`)
     }
     const resolved = await this.resolveArgs(args)
-    const value = await handler(this.context(channel), ...resolved)
+    const value = await handler(this.context(channel, caller), ...resolved)
     return this.encodeValue(value)
   }
 
   /** Fire-and-forget: the counterpart of `ipcRenderer.send`. */
-  async send(channel: string, args: unknown[]): Promise<void> {
+  async send(channel: string, args: unknown[], caller?: RpcContext): Promise<void> {
     const handler = this.handlers.get(channel)
     if (!handler) {
-      this.onMissing(channel)
+      // Electron drops a `send` to an unregistered channel without a sound;
+      // the browser does the same, and only the first one is worth a line.
+      this.reportMissing(channel)
       return
     }
     const resolved = await this.resolveArgs(args)
-    await handler(this.context(channel), ...resolved)
+    await handler(this.context(channel, caller), ...resolved)
   }
 
-  private context(channel: string): ChannelContext {
+  private reportMissing(channel: string): void {
+    if (this.missing.has(channel)) return
+    this.missing.add(channel)
+    this.onMissing(channel)
+  }
+
+  private context(channel: string, caller?: RpcContext): ChannelContext {
     return {
       channel,
+      caller,
       publish: (target: string, args: unknown[]) => {
         this.events.publish(target, args)
       },

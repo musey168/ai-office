@@ -1,4 +1,5 @@
 import { BridgeClient } from './client'
+import { EditorHost, pageContext } from './host'
 
 /**
  * The browser-side stand-in for the parts of Electron the upstream preload
@@ -10,7 +11,7 @@ import { BridgeClient } from './client'
  * written here.
  */
 
-const client = new BridgeClient()
+const client = new BridgeClient({ context: () => pageContext(window.location) })
 
 type Listener = (event: unknown, ...args: unknown[]) => void
 
@@ -63,4 +64,14 @@ export const webFrame = {
   isWordMisspelled(_text: string): boolean {
     return false
   },
+}
+
+/**
+ * The shell page hosts the editors. Upstream does that with native
+ * `WebContentsView`s painted above the shell's DOM; a browser needs an
+ * iframe, and the shell renderer — which knows nothing about the editors —
+ * stays untouched.
+ */
+if (typeof window !== 'undefined' && pageContext(window.location).app === 'shell') {
+  void new EditorHost(client).start()
 }
