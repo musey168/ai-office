@@ -1,0 +1,9 @@
+{
+  "compaction": {
+    "modelOverrides": {
+      "minimax/MiniMax-M3.1-Flash": {
+        "reserveTokens": 500000
+      }
+    }
+  }
+}

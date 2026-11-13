@@ -38,7 +38,7 @@ tags: [web, ai]
 
 ## 做法
 
-在 `web/ai` 下新增一个 `AgentTransport` 实现 `createSseTransport`，**不改 `packages/agent-core`**：
+在 `web/ai-service` 下新增一个 `AgentTransport` 实现 `createSseTransport`，**不改 `packages/agent-core`**：
 
 ```
 stream(request, callbacks) → handle
@@ -76,7 +76,7 @@ CLI 在服务器上执行时，其路径参数同样受 `web/workspace-store` �
 ## 不变量
 
 1. 模型调用只在服务端发起，浏览器不直连模型、不持有密钥；
-2. `packages/agent-core` 与 `packages/ai-provider` **不改**——新增的 transport 实现只存在于 `web/ai`；
+2. `packages/agent-core` 与 `packages/ai-provider` **不改**——新增的 transport 实现只存在于 `web/ai-service`；
 3. SSE 必须复刻 240 秒 ping 保活语义（上游的 `onActivity` 每 5 秒一次 ping）；
 4. 回合有模型调用次数上限，沿用上游默认 100；
 5. 技能的工具执行一律经 `web/workspace-store` / `web/engine-pool`，不得直接碰文件系统；

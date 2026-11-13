@@ -41,7 +41,7 @@ flowchart TB
   subgraph Browser["浏览器（单 origin）"]
     Shell["shell 应用<br/>Home + 标签栏"]
     Ed["六个编辑器<br/>/app/docs /app/sheets /app/slides<br/>/app/pdf /app/markdown /app/html"]
-    Bridge["web-bridge<br/>注入 window.desktop / desktopApi / slidesApi…"]
+    Bridge["web/rpc-bridge<br/>注入 window.desktop / desktopApi / slidesApi…"]
     DocxEng["docx 引擎<br/>docx-engine parse/save<br/>（上游本就在 renderer worker）"]
   end
 
@@ -117,18 +117,9 @@ flowchart TB
 
 ## 服务端模块边界
 
-新增代码全部放在 `web/` 目录，不进上游 `apps/` 与 `packages/`：
+新增代码全部放在 `web/` 目录，不进上游 `apps/` 与 `packages/`。
 
-| 模块 | 职责 | 依赖上游 | 禁止 |
-| --- | --- | --- | --- |
-| `web/server` | HTTP 服务、静态资源、SSE、路由 | — | 不得直接 import `apps/*/src/main` |
-| `web/rpc` | 通道名 → 处理器的路由与参数校验 | `apps/*/src/shared/ipc.ts`（仅类型） | 不得在浏览器侧执行 |
-| `web/bridge` | 浏览器端注入的 preload 替身 | 上游 preload 的类型 | 不得含业务逻辑 |
-| `web/workspace` | `WorkspaceStore` 接口与本地目录实现 | `packages/cli/src/fs.ts` 的围栏与原子写 | 不得绕过围栏 |
-| `web/engine-pool` | `worker_threads` 池，调度**服务端侧**引擎调用（pptx / 转换 / 后处理） | `pptx-engine`、`xlsx-gateway`、`pdf2docx`、`html2docx` 等 | 不得调用 Electron API；不承担 docx 的 parse/save |
-| `web/render` | Chromium 无头渲染，取代 `--headless-export` | — | 不得阻塞 HTTP 事件循环 |
-| `web/ai` | `AgentTransport` 的 SSE 实现、provider 配置注入 | `agent-core`、`ai-provider` | 不自行实现模型协议 |
-| `web/index` | 服务端文件索引 | 移植 `apps/shell/src/main/file-index/` | 不得放在 renderer 里 |
+模块清单只有一份，见「模块拆分」一节——职责、依赖上游与禁止事项都在那张表里，模块与 SPEC 的对应关系也在同一张表上。本节不再另列模块。
 
 **已知需要先解开的耦合**：`packages/cli` 反向 import 了 `apps/sheets/src/main/atomic-write` 与 `xlsx-sidecar-client`。这两处要么把被依赖的代码提到 `packages/`，要么在 `web/` 里提供等价实现——前者对上游更友好（属上游重构，合并时需与上游沟通），后者对 fork 更干净。**默认选后者**，除非上游接受该重构。
 
@@ -143,7 +134,7 @@ move(src, dst) / delete(path) / stat(path) / search(query)
 
 - **路径围栏**：所有路径先经 `assertAllowed` 校验（沿用 `packages/cli/src/fs.ts:71` 的 `GENOFFICE_ALLOWED_ROOTS` 思路），越界即拒绝，围栏不可绕过；
 - **原子写**：沿用上游的同目录 tmp + rename 模式；
-- **存储接口与实现分离**：接口在 `web/workspace`，本地目录实现是默认实现，将来换 MinIO/S3 只加实现、不动调用方；
+- **存储接口与实现分离**：接口在 `web/workspace-store`，本地目录实现是默认实现，将来换 MinIO/S3 只加实现、不动调用方；
 - **工作区根目录**的划分方式取决于目标文档里的待决问题 ①（多人文件与协作模型）。当前做法：单一根目录、不按人隔离、不加编辑锁，与上游单机行为一致。
 
 索引（全文搜索）用上游的 `node:sqlite` FTS5 + CJK 分词方案，数据库文件落在服务端的存储目录。
@@ -194,7 +185,7 @@ packages/*/              ← 上游文件，原则上不改
 
 **允许的插入点**（数量要控制住，每处都要写清为什么必须动上游）：
 
-- renderer 入口挂载 `web/bridge`（否则拿不到 preload 替身）；
+- renderer 入口挂载 `web/rpc-bridge` 的 bridge 脚本（否则拿不到 preload 替身）；
 - `apps/*/src/shared/ipc.ts`——只跟上游改，不自己改；
 - 构建配置（`electron.vite.config.ts` → 增加 web 产物），按 app 逐个增加；
 - **docs 的 CSP**（`apps/docs/src/renderer/index.html:6-8`）——`img-src` / `connect-src` 里写死了 `genoffice-docx-media:`，网页版必须改成服务端 URL，否则文档里的图片全部加载不出来。这是一处**硬阻塞**，不是可选优化；
@@ -223,17 +214,21 @@ packages/*/              ← 上游文件，原则上不改
 
 ## 模块拆分
 
-每个模块一份 SPEC，写在 `web/<模块>/SPEC.md`，与将来的代码目录同位：
+每个模块一份 SPEC，写在 `web/<模块>/SPEC.md`，与将来的代码目录同位。模块清单只有这一份：
 
-| 模块 | 职责 | 边界要点 |
-| --- | --- | --- |
-| [web-server](web/web-server/SPEC.md) | HTTP 层、静态资源、SSE、路由 | 不含引擎调用与文件 IO |
-| [rpc-bridge](web/rpc-bridge/SPEC.md) | 通道路由 + 浏览器端 preload 替身 | 契约来自上游 `shared/ipc.ts` |
-| [workspace-store](web/workspace-store/SPEC.md) | `WorkspaceStore` 接口、本地实现、围栏 | 唯一文件入口 |
-| [engine-pool](web/engine-pool/SPEC.md) | worker 池与引擎调度 | 只认字节与路径 |
-| [render-service](web/render-service/SPEC.md) | Chromium 无头渲染 | 取代 `--headless-export` |
-| [ai-service](web/ai-service/SPEC.md) | AgentTransport(SSE)、provider 配置 | 不实现模型协议 |
-| [file-index](web/file-index/SPEC.md) | 服务端 FTS5 索引 | 移植上游 file-index |
+| 模块 | 职责 | 依赖上游 | 边界要点 |
+| --- | --- | --- | --- |
+| [web-server](web/web-server/SPEC.md) | HTTP 层、静态资源、SSE、路由 | — | 不含引擎调用与文件 IO；不得直接 import `apps/*/src/main`；不得引入 Web 框架（沿用上游 `packages/cli/src/mcp/http.ts` 的 `node:http`） |
+| [rpc-bridge](web/rpc-bridge/SPEC.md) | 服务端通道路由 + **浏览器端 preload 替身**（注入与上游同名同签名的全局对象） | 上游 `apps/*/src/shared/ipc.ts`（仅类型） | 契约来自上游 `shared/ipc.ts`；路由不得在浏览器侧执行；preload 替身不得含业务逻辑 |
+| [workspace-store](web/workspace-store/SPEC.md) | `WorkspaceStore` 接口、本地实现、围栏 | `packages/cli/src/fs.ts` 的围栏与原子写 | 唯一文件入口；不得绕过围栏 |
+| [engine-pool](web/engine-pool/SPEC.md) | `worker_threads` 池与引擎调度——调度**服务端侧**引擎调用（pptx / 转换 / 后处理） | `pptx-engine`、`xlsx-gateway`、`pdf2docx`、`html2docx` 等 | 只认字节与路径；不得调用 Electron API；**不承担 docx 的 parse/save**（按上游分工留在浏览器） |
+| [render-service](web/render-service/SPEC.md) | Chromium 无头渲染，取代 `--headless-export` | — | 不得阻塞 HTTP 事件循环 |
+| [ai-service](web/ai-service/SPEC.md) | `AgentTransport`(SSE) 实现、provider 配置注入 | `agent-core`、`ai-provider` | 不自行实现模型协议 |
+| [file-index](web/file-index/SPEC.md) | 服务端 FTS5 全文索引 | 移植上游 `apps/shell/src/main/file-index/` | 不得放在 renderer 里 |
+
+**`web/bridge` 的去留**：并入 `web/rpc-bridge`，不单列。[rpc-bridge 的 SPEC](web/rpc-bridge/SPEC.md) 把「浏览器端 preload 替身」列为该模块自己拥有的三样东西之一，不变量 1 也写明「上游 renderer 文件零改动，只在入口挂载**本模块的** bridge 脚本」——浏览器端替身是 rpc-bridge 的一个交付物，不是独立模块。按「一个模块一份 SPEC」的规矩把它单列，就得再写一份 `web/bridge/SPEC.md`，两份 spec 会就同一套通道契约分叉。
+
+模块名以 SPEC 所在目录为准。合并前的旧名 `web/server`、`web/rpc`、`web/bridge`、`web/workspace`、`web/render`、`web/ai`、`web/index` 一律作废。
 
 ## 未决
 
