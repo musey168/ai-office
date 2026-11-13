@@ -41,3 +41,6 @@ __pycache__/
 # One-off verification tests kept while chasing a fix; promote to a real test
 # file (or delete) instead of committing them under this name.
 _scratch-*
+
+# AI Office 本地部署信息（含凭据，不进版本控制）
+/deploy/server.local.md
