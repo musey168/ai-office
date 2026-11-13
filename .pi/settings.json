@@ -1,8 +1,35 @@
 {
   "compaction": {
+    "enabled": true,
+    "reserveTokens": 16384,
+    "keepRecentTokens": 20000,
     "modelOverrides": {
       "minimax/MiniMax-M3.1-Flash": {
-        "reserveTokens": 500000
+        "reserveTokens": 400000
+      },
+      "minimax-cn/MiniMax-M3.1-Flash": {
+        "reserveTokens": 400000
+      },
+      "fireworks/accounts/fireworks/models/minimax-m3p1-flash": {
+        "reserveTokens": 400000
+      },
+      "huggingface/MiniMaxAI/MiniMax-M3.1-Flash": {
+        "reserveTokens": 400000
+      },
+      "opencode/minimax-m3.1-flash-free": {
+        "reserveTokens": 400000
+      },
+      "opencode-go/minimax-m3.1-flash": {
+        "reserveTokens": 400000
+      },
+      "radius/minimax-m3.1-flash": {
+        "reserveTokens": 400000
+      },
+      "vercel-ai-gateway/minimax/minimax-m3.1-flash": {
+        "reserveTokens": 400000
+      },
+      "nvidia/minimaxai/minimax-m3.1-flash": {
+        "reserveTokens": 105000
       }
     }
   }
