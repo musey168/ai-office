@@ -81,6 +81,12 @@ export class EditorHost {
     frame.style.left = '0'
     frame.style.right = '0'
     frame.style.bottom = '0'
+    // An iframe is a replaced element: with `width: auto` / `height: auto` it
+    // keeps its intrinsic size (300×150) and the opposite edges are ignored.
+    // Both have to be stated, or the editor sits in a small box in the corner.
+    frame.style.width = '100vw'
+    frame.style.height = `calc(100vh - ${TAB_BAR_HEIGHT}px)`
+    frame.style.height = `calc(100dvh - ${TAB_BAR_HEIGHT}px)`
     // Below the tab strip (upstream gives it z-index 10), above the shell's
     // own content.
     frame.style.zIndex = '5'

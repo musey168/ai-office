@@ -26,7 +26,12 @@ const bridgeRoot = envPath('AIOFFICE_BRIDGES', resolve(here, '../../rpc-bridge/d
 
 // The format engines run in worker threads — a .pptx parse must not block
 // the HTTP event loop.
-const engines = new EnginePool({ workspaceRoots: [workspaceRoot] })
+const engines = new EnginePool({
+  workspaceRoots: [workspaceRoot],
+  workerPath: process.env.AIOFFICE_ENGINE_WORKER
+    ? resolve(process.env.AIOFFICE_ENGINE_WORKER)
+    : undefined,
+})
 
 const office = createOfficeServer({
   port,
@@ -42,6 +47,7 @@ office.server.listen(port, host, () => {
   console.log(`[web-server] listening on http://${host}:${port}`)
   console.log(`[web-server] workspace: ${workspaceRoot}`)
   console.log(`[web-server] renderers: ${rendererRoot}`)
+  console.log(`[web-server] bridges: ${bridgeRoot}`)
 })
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

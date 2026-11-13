@@ -14,8 +14,14 @@ import { Worker } from 'node:worker_threads'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
-/** Where the built worker lives (`npm run build:worker`). */
-export const WORKER_PATH = resolve(here, '../dist/worker.mjs')
+/**
+ * Where the built worker lives (`npm run build:worker`).
+ *
+ * The deployment runs a bundled server, where the module directory is not
+ * the package directory — so the environment may point at the worker.
+ */
+export const WORKER_PATH =
+  process.env.AIOFFICE_ENGINE_WORKER ?? resolve(here, '../dist/worker.mjs')
 
 export interface EnginePoolOptions {
   /** The workspace roots the workers may touch. */

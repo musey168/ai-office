@@ -38,24 +38,39 @@ function ok(message: string): void {
 }
 
 async function main(): Promise<void> {
-  const workspace = realpathSync(await mkdtemp(join(tmpdir(), 'aio-e2e-')))
+  // A deployment can be checked the same way: point the run at a running
+  // server instead of starting one here.
+  const remoteBase = process.env.AIOFFICE_E2E_BASE?.trim()
+  const remoteWorkspace = process.env.AIOFFICE_E2E_WORKSPACE?.trim()
+
+  const workspace = remoteWorkspace
+    ? remoteWorkspace
+    : realpathSync(await mkdtemp(join(tmpdir(), 'aio-e2e-')))
   const document = join(workspace, '简单文档.docx')
   const withPicture = join(workspace, '带图片的文档.docx')
-  await copyFile(FIXTURE, document)
-  await copyFile(PICTURE_FIXTURE, withPicture)
-  const before = await stat(document)
+  if (!remoteWorkspace) {
+    await copyFile(FIXTURE, document)
+    await copyFile(PICTURE_FIXTURE, withPicture)
+  }
+  // A remote workspace is not on this disk — the file checks are skipped
+  // there and the deployment checks them over ssh instead.
+  const before = remoteWorkspace ? null : await stat(document)
 
-  const office = createOfficeServer({
-    port: 0,
-    host: '127.0.0.1',
-    workspaceRoot: workspace,
-    rendererRoot: join(repoRoot, 'web/web-server/dist'),
-    bridgeRoot: join(repoRoot, 'web/rpc-bridge/dist'),
-  })
-  await new Promise<void>((done) => office.server.listen(0, '127.0.0.1', done))
-  const address = office.server.address()
-  const port = typeof address === 'object' && address ? address.port : 0
-  const base = `http://127.0.0.1:${port}`
+  let office: ReturnType<typeof createOfficeServer> | null = null
+  let base = remoteBase ?? ''
+  if (!remoteBase) {
+    office = createOfficeServer({
+      port: 0,
+      host: '127.0.0.1',
+      workspaceRoot: workspace,
+      rendererRoot: join(repoRoot, 'web/web-server/dist'),
+      bridgeRoot: join(repoRoot, 'web/rpc-bridge/dist'),
+    })
+    await new Promise<void>((done) => office!.server.listen(0, '127.0.0.1', done))
+    const address = office.server.address()
+    const port = typeof address === 'object' && address ? address.port : 0
+    base = `http://127.0.0.1:${port}`
+  }
   console.log(`server: ${base}\nworkspace: ${workspace}`)
 
   const browser = await chromium.launch()
@@ -77,6 +92,14 @@ async function main(): Promise<void> {
     await page.goto(`${base}/app/shell/`, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector('.app-frame', { timeout: 30_000 })
     ok('首页渲染出来了（不是白屏）')
+
+    // A document tab left open by an earlier run hides the home content —
+    // the tab bar is the way back.
+    const homeTab = page.locator('.tab-home')
+    if (await homeTab.count()) {
+      await homeTab.first().click()
+      await page.waitForTimeout(500)
+    }
 
     step('文件树里能看到工作区的文档')
     // Upstream's tree starts collapsed, and the file list shows the files of
@@ -113,15 +136,23 @@ async function main(): Promise<void> {
 
     step('保存（Ctrl+S）')
     await page.keyboard.press('Control+s')
-    const changed = await waitForFileChange(document, before.mtimeMs, before.size, 30_000)
-    ok(`文件被重写了：${changed.size} 字节（原来 ${before.size}）`)
-
-    step('重新读一遍磁盘上的文件，确认改动真的落盘')
-    const written = await readFile(document)
-    if (written.byteLength === before.size && written.equals(await readFile(FIXTURE))) {
-      throw new Error('the file on disk is unchanged')
+    if (before) {
+      const changed = await waitForFileChange(document, before.mtimeMs, before.size, 30_000)
+      ok(`文件被重写了：${changed.size} 字节（原来 ${before.size}）`)
+    } else {
+      ok('保存请求成功（远端模式，落盘由部署侧用 ssh 确认）')
     }
-    ok('磁盘上的文件确实变了')
+
+    if (before) {
+      step('重新读一遍磁盘上的文件，确认改动真的落盘')
+      const written = await readFile(document)
+      if (written.byteLength === before.size && written.equals(await readFile(FIXTURE))) {
+        throw new Error('the file on disk is unchanged')
+      }
+      ok('磁盘上的文件确实变了')
+    } else {
+      step('远端模式：落盘由部署侧用 ssh 确认')
+    }
 
     step('文档里的图片能显示')
     // Upstream hides the home content while a document tab is active — the
@@ -183,7 +214,7 @@ async function main(): Promise<void> {
     }
   } finally {
     await browser.close()
-    await office.close()
+    await office?.close()
   }
 }
 

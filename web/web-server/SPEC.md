@@ -54,6 +54,8 @@ tags: [web, http]
 | `POST /ai/stream` + `GET /ai/stream/:requestId` | AI 流式回合 | `web/ai-service` |
 | `GET /tasks/:taskId` | 长耗时任务状态与结果 | `web/engine-pool` |
 | `GET /bridge/<app>.js` | 编译好的上游 preload（通道契约的唯一一份） | `web/rpc-bridge` |
+| `GET /bridge/polyfill.js` | 安全上下文的 API 补齐（每个页面都注入） | `web/rpc-bridge` |
+| `GET /media/slide/<id>` | 幻灯片媒体（上游 `genoffice-slide-media://` 的同源替身） | `web/engine-pool` |
 | `GET /media/<token>` | 文档字节的一次性 URL（上游 `genoffice-docx-media://handoff/<uuid>` 的同源替身） | `web/rpc-bridge` |
 | `POST /bytes` + `GET /bytes/<token>` | 二进制出入（上传拿 token，取回即销毁） | `web/rpc-bridge` |
 | `GET /health` | 健康检查 | 本模块 |
@@ -74,6 +76,11 @@ tags: [web, http]
 
 shell 的 renderer 是多入口（`index` / `update` / `pdf-password`）；第一刀只编 `index`，
 另两个是 Electron 专有窗口（自动更新、PDF 密码框），随各自的切片补。
+
+## 根路径
+
+`GET /` **跳转**到 `/app/shell/`（302）。应用本身就是首页，
+让人在地址栏敲一个根路径然后看见 404，是没有理由的。
 
 ## 静态资源
 

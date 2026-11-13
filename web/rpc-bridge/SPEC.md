@@ -122,6 +122,22 @@ Electron 用 `event.sender.id`（发起调用的 web contents 的 id）把文档
 浏览器没有这个机制，于是 **bridge 脚本**（`src/host.ts`）在 shell 页面里挂一个 iframe，
 盖住标签栏以下的内容区，跟着 `tabs:changed` 切换 `src`。上游 renderer 零改动。
 
+iframe 是**替换元素**：`width: auto` / `height: auto` 时它保留固有的 300×150，
+`left/right/top/bottom` 这四条边会被忽略。所以宽高必须写出来——
+实测漏掉宽度时，编辑器在 300px 宽的框里排版，ribbon 挤成一列、画布是空的，
+而 DOM 断言（ProseMirror 有内容）照样通过。**这类问题只有看截图才发现得了。**
+
+### 安全上下文的缺口
+
+浏览器只在**安全上下文**（HTTPS 或 localhost）里提供 `crypto.randomUUID`、`crypto.subtle`、
+`navigator.clipboard` 等 API。部署在内网的 HTTP 上，这些**不存在**——
+上游的文档渲染器启动时就会调 `crypto.randomUUID`，页面直接抛
+"crypto.randomUUID is not a function"。
+
+因此 bridge 在**每个页面**注入一个 polyfill 脚本（`src/polyfill.ts`）。
+它不是塞进 bridge 包里的：上游不是每个 preload 都 import `electron`，
+只有碰得到 shim 的页面才带得上 polyfill——所以 polyfill 走独立入口，由服务端注入。
+
 ### 字节：一次性 token 与一次性 URL
 
 Electron 的 IPC 用结构化克隆，能直接传 `ArrayBuffer`；JSON 不能。两条方向各有做法：
@@ -257,7 +273,10 @@ shim 把它转成 token，服务端还原成字节交给存储层。
 10. 服务端访问文件一律经 `web/workspace-store`，不得绕过围栏；
 11. **通道参数与上游一字不差**——上下文、tab、session 一律走信封或旁路，不得混进参数；
 12. 上游 renderer 在启动路径上 `Promise.all` 的通道**必须能 resolve**：
-    缺一个就会让整个 `Promise.all` reject，文档直接回落到空白页（实测：`docs:consume-new-blank`）。
+    缺一个就会让整个 `Promise.all` reject，文档直接回落到空白页（实测：`docs:consume-new-blank`）；
+13. **页面必须先于渲染器补齐安全上下文的 API**——非 HTTPS 的部署里
+    `crypto.randomUUID` 不存在，上游文档渲染器启动即崩；
+14. 编辑器 iframe 的宽高**必须写明**——替换元素的固有尺寸会让四条边失效。
 
 ## 风险
 

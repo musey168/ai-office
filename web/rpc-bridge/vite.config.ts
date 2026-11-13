@@ -22,9 +22,16 @@ export default defineConfig({
     target: 'es2022',
     minify: 'esbuild',
     rollupOptions: {
-      input: Object.fromEntries(
-        APPS.map((app) => [app, resolve(__dirname, '../../apps', app, 'src/preload/index.ts')]),
-      ),
+      input: {
+        // The polyfill every page needs, before the app's bridge.
+        polyfill: resolve(__dirname, 'src/polyfill-entry.ts'),
+        ...Object.fromEntries(
+          APPS.map((app) => [
+            app,
+            resolve(__dirname, '../../apps', app, 'src/preload/index.ts'),
+          ]),
+        ),
+      },
       output: {
         // ES modules: the browser loads them with <script type="module">, and
         // module scripts run in document order, so the bridge can be

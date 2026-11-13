@@ -28,12 +28,48 @@ tags: [deployment, ops]
 
 | 项 | 计划 |
 | --- | --- |
-| 编排 | `docker compose`，项目目录放家目录下 |
+| 编排 | `docker compose`，项目目录 `/home/quantix/ai-office/` |
 | 基础镜像 | `node:22-bookworm-slim` + 预装字体（幻灯片与 PDF 渲染需要）+ Playwright Chromium（`--with-deps`） |
 | Rust sidecar | `xlsx-sidecar` 需在镜像内构建（上游 `apps/sheets/native/xlsx-engine`），按目标机架构编译 |
 | 数据卷 | `workspace`（用户文件）与 `state`（索引库、AI 设置、项目数据）分两个卷，都放在家目录下 |
 | 对外端口 | 待定；部署前重新探测空闲端口 |
 | 访问方式 | 内网直接访问，与该机上现有服务的暴露方式一致 |
+
+### 已经落地的部分（2026-11-13）
+
+| 项 | 实际 |
+| --- | --- |
+| 编排 | `docker compose -p ai-office`，定义在 `web/deploy/compose.yaml` |
+| 镜像 | **不构建镜像**：直接用服务器上已有的 `node:22-bookworm-slim`，代码以只读卷挂进去。根分区只剩 2.3 GB，构建镜像层会把它撑爆 |
+| 交付物 | `web/deploy/package.sh` 打成一个目录：单文件服务端（无运行时依赖）+ 7 个 renderer bundle + 7 个 bridge bundle + 引擎 worker |
+| 目录 | 容器内外**同一路径**（`/home/quantix/ai-office/...`）——文件树显示的是绝对路径，必须是用户在服务器上真能摸到的那个路径 |
+| 运行身份 | `uid 1114`（宿主用户），否则服务器上写出来的文件属主是 root，用户自己改不动 |
+| 端口 | `19100`（部署前重新探测过，空闲） |
+| 访问 | `http://192.168.1.20:19100/`（根路径 302 到 `/app/shell/`） |
+
+**Chromium 与 Rust sidecar 还没有上**：幻灯片的渲染树是在**浏览器里**画的，
+不需要服务端渲染；xlsx 引擎还没接。两者等对应模块落地再加，
+免得现在就往根分区塞几百 MB。
+
+### 明文 HTTP 的代价
+
+内网 HTTP 不是安全上下文，浏览器不给 `crypto.randomUUID`、`crypto.subtle`、
+`navigator.clipboard`。上游渲染器启动就要用 `crypto.randomUUID`——不补齐就是白屏。
+现在的做法是服务端给每个页面注入一个 polyfill 脚本。
+
+这不是长久之计：**剪贴板、屏幕录制（上游的幻灯片录屏）、文件选择器**这些能力
+在 HTTP 下要么残缺要么没有。要 1:1，就得上 HTTPS——
+自签证书浏览器会报警，所以要么走内网 DNS + 正式证书，要么在反向代理上终止 TLS。
+
+### 共享工作区带来的新问题
+
+首版没有登录，所有人共用同一个工作区目录，于是：
+
+- **标签页是服务端的全局状态**：A 打开的文档会出现在 B 的标签栏上；
+- **待打开的文档是一次性的**：谁先消费谁拿到；
+- 文件同名覆盖时，后保存的人赢。
+
+这三件事在有登录之前都得记在缺口清单里，不能装作没有。
 
 ## 部署前检查清单
 

@@ -4,7 +4,13 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { LocalWorkspaceStore, type WorkspaceStore } from '@ai-office/workspace-store'
 import type { EngineRunner } from '@ai-office/rpc-bridge'
-import { findStaticFile, injectBridge, resolveWithinRoot, sendFile } from './static.js'
+import {
+  findStaticFile,
+  injectBridge,
+  injectPolyfill,
+  resolveWithinRoot,
+  sendFile,
+} from './static.js'
 import {
   ChannelRouter,
   createAppChannels,
@@ -110,6 +116,14 @@ export function createOfficeServer(options: ServerOptions): OfficeServer {
 
     if (pathname === '/health' && req.method === 'GET') {
       json(res, 200, { status: 'ok', server: 'ai-office' })
+      return
+    }
+
+    // The root is the application: the shell is the home screen.
+    if (pathname === '/' && req.method === 'GET') {
+      res.statusCode = 302
+      res.setHeader('location', '/app/shell/')
+      res.end()
       return
     }
 
@@ -270,7 +284,10 @@ async function serveApp(res: ServerResponse, rendererRoot: string, pathname: str
   }
   if (file.path.endsWith('.html')) {
     const html = await readFile(file.path, 'utf8')
-    const injected = injectBridge(html, `/bridge/${app}.js`)
+    const injected = injectPolyfill(
+      injectBridge(html, `/bridge/${app}.js`),
+      '/bridge/polyfill.js',
+    )
     res.statusCode = 200
     res.setHeader('content-type', 'text/html; charset=utf-8')
     res.setHeader('cache-control', 'no-cache')

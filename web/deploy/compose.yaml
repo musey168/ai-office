@@ -1,0 +1,43 @@
+# The AI Office web port on the test server.
+#
+# Nothing here touches the machine's existing services: the compose project
+# has its own name, its own directory under the home partition, and it only
+# reads the image that is already in the local image library.
+#
+# The data (the shared workspace) lives on the home partition — the root
+# partition has no room for it.
+
+services:
+  ai-office:
+    image: node:22-bookworm-slim
+    container_name: ai-office
+    restart: unless-stopped
+    working_dir: /home/quantix/ai-office/app
+    # The server runs as the host user, so the files it writes in the
+    # workspace stay the user's own.
+    user: "1114:1114"
+    command: ["node", "/home/quantix/ai-office/app/server/server.mjs"]
+    ports:
+      # The port on the host. 19100 was free when this was written; the
+      # deployment checks again before it starts anything.
+      - "19100:8080"
+    environment:
+      PORT: "8080"
+      HOST: "0.0.0.0"
+      AIOFFICE_WORKSPACE: /home/quantix/ai-office/data/workspace
+      AIOFFICE_RENDERERS: /home/quantix/ai-office/app/renderers
+      AIOFFICE_BRIDGES: /home/quantix/ai-office/app/bridges
+      AIOFFICE_ENGINE_WORKER: /home/quantix/ai-office/app/worker/worker.mjs
+    volumes:
+      # Mounted at the **same path** inside the container as on the host: the
+      # file tree shows absolute paths, and those have to be the paths the
+      # user can actually reach on the server.
+      - /home/quantix/ai-office/app:/home/quantix/ai-office/app:ro
+      - /home/quantix/ai-office/data/workspace:/home/quantix/ai-office/data/workspace
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

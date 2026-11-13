@@ -1,5 +1,6 @@
 import { BridgeClient } from './client'
 import { EditorHost, pageContext } from './host'
+import { installSecureContextPolyfills } from './polyfill'
 
 /**
  * The browser-side stand-in for the parts of Electron the upstream preload

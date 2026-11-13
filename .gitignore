@@ -53,3 +53,8 @@ AGENTS.override.md
 
 # web/ modules install their own dependencies
 node_modules/
+
+# The web port's build output: the browser bundles, the bridge bundles, the
+# server bundle and the deployment package are all artifacts.
+web/web-server/dist-server/
+web/deploy/out/

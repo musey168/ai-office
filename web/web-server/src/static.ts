@@ -99,6 +99,24 @@ export function injectBridge(html: string, bridgeUrl: string): string {
   return html.replace('</body>', `  ${tag}\n  </body>`)
 }
 
+/**
+ * Inject the secure-context polyfill into an HTML document.
+ *
+ * It has to run before **everything** the page runs: the upstream renderers
+ * call `crypto.randomUUID` while they boot, and the browsers only have it
+ * in a secure context (HTTPS or localhost) — the deployment serves plain
+ * HTTP on the LAN.
+ */
+export function injectPolyfill(html: string, polyfillUrl: string): string {
+  if (html.includes(polyfillUrl)) return html
+  const tag = `<script type="module" src="${polyfillUrl}"></script>`
+  const moduleScript = /<script[^>]*type=["']module["'][^>]*><\/script>/i.exec(html)
+  if (moduleScript?.index !== undefined) {
+    return html.slice(0, moduleScript.index) + tag + '\n    ' + html.slice(moduleScript.index)
+  }
+  return html.replace('</body>', `  ${tag}\n  </body>`)
+}
+
 /** Write a file to the response, with the caching rules the assets need. */
 export async function sendFile(res: ServerResponse, file: StaticFile): Promise<void> {
   const isHtml = file.path.endsWith('.html')
