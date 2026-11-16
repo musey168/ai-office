@@ -35,6 +35,11 @@ export {
   type PendingOpens,
 } from './server/channels/home'
 export { createTabChannels, type TabChannelDeps } from './server/channels/tabs'
+export {
+  createDocumentChannels,
+  type DocumentChannels,
+  type DocumentChannelsDeps,
+} from './server/channels/documents'
 export { createMarkdownChannels, type MarkdownChannelDeps } from './server/channels/markdown'
 export { createHtmlChannels, type HtmlChannelDeps } from './server/channels/html'
 export { createPdfChannels, type PdfChannelDeps } from './server/channels/pdf'

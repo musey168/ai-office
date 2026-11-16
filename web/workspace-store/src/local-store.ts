@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { lstat, mkdir, open, readdir, rename, copyFile, unlink, stat } from 'node:fs/promises'
+import { lstat, mkdir, open, readdir, rename, copyFile, unlink, stat } from 'fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { atomicWriteFile } from './atomic-write'
 import { WorkspaceError } from './errors'

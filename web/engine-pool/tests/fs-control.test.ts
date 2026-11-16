@@ -16,7 +16,7 @@ describe('the controlled filesystem', () => {
   it('writes inside the workspace through the store', async () => {
     const workspace = realpathSync(await mkdtemp(join(tmpdir(), 'aio-fs-')))
     const store = new LocalWorkspaceStore({ roots: [workspace] })
-    const control = await import('../src/fs-control')
+    const control = await import('../src/fs-control-impl')
     control.useWorkspaceStore(store, [workspace])
 
     const target = join(workspace, '笔记.txt')
@@ -31,7 +31,7 @@ describe('the controlled filesystem', () => {
     const workspace = realpathSync(await mkdtemp(join(tmpdir(), 'aio-fs-')))
     const outside = realpathSync(await mkdtemp(join(tmpdir(), 'aio-out-')))
     const store = new LocalWorkspaceStore({ roots: [workspace] })
-    const control = await import('../src/fs-control')
+    const control = await import('../src/fs-control-impl')
     control.useWorkspaceStore(store, [workspace])
 
     // A path outside the workspace is the server's own business (the app
@@ -45,7 +45,7 @@ describe('the controlled filesystem', () => {
   it('reads a workspace file through the store', async () => {
     const workspace = realpathSync(await mkdtemp(join(tmpdir(), 'aio-fs-')))
     const store = new LocalWorkspaceStore({ roots: [workspace] })
-    const control = await import('../src/fs-control')
+    const control = await import('../src/fs-control-impl')
     control.useWorkspaceStore(store, [workspace])
 
     await writeFile(join(workspace, 'a.txt'), '内容')
@@ -56,7 +56,7 @@ describe('the controlled filesystem', () => {
   it('refuses a synchronous write inside the workspace', async () => {
     const workspace = realpathSync(await mkdtemp(join(tmpdir(), 'aio-fs-')))
     const store = new LocalWorkspaceStore({ roots: [workspace] })
-    const control = await import('../src/fs-control')
+    const control = await import('../src/fs-control-impl')
     control.useWorkspaceStore(store, [workspace])
 
     // The store has no synchronous surface; a synchronous write would skip

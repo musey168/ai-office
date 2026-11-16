@@ -121,3 +121,35 @@ export class SlidesContentsRegistry {
     return contents
   }
 }
+
+/**
+ * The events the upstream code pushed, waiting to go back to the browser.
+ *
+ * Every application that keeps a document in the main process pushes its
+ * events here; the worker collects them after each job.
+ */
+export const hostEvents: { tabId: string; channel: string; args: unknown[] }[] = []
+
+/**
+ * The sender ids every application shares.
+ *
+ * Upstream keys its sessions by `e.sender.id`, and the browser tab is the
+ * same tab whatever application it is showing, so the numbers are handed
+ * out once.
+ */
+export const hostSenders = new SenderRegistry()
+
+/**
+ * The web contents the upstream code pushes events at.
+ *
+ * It is registered once, for all the applications: upstream resolves a web
+ * contents for every session it owns, and they all live in the same worker.
+ */
+export const hostContents = new SlidesContentsRegistry(hostSenders, {
+  push: (tabId, channel, args) => {
+    hostEvents.push({ tabId, channel, args })
+  },
+  forget: (tabId) => {
+    hostSenders.forget(tabId)
+  },
+})

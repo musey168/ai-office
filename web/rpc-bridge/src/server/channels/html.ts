@@ -13,10 +13,17 @@ import type { ChannelHandler } from '../router'
 export interface HtmlChannelDeps {
   store: WorkspaceStore
   tabs: TabRegistry
+  /**
+   * Open the document in the engine.
+   *
+   * Upstream keeps the open page in its main process — it grants the paths
+   * it may read and write, and its save handler writes it.
+   */
+  openForTab?: (tabId: string, filePath: string) => Promise<void>
 }
 
 export function createHtmlChannels(deps: HtmlChannelDeps): Record<string, ChannelHandler> {
-  const { store, tabs } = deps
+  const { store, tabs, openForTab } = deps
 
   const grantedPath = (tabId?: string): string | undefined => {
     const tab = tabId ? tabs.get(tabId) : undefined
@@ -24,7 +31,14 @@ export function createHtmlChannels(deps: HtmlChannelDeps): Record<string, Channe
   }
 
   return {
-    'html:consume-pending': (ctx) => grantedPath(ctx.caller?.tabId) ?? null,
+    'html:consume-pending': async (ctx) => {
+      const tabId = ctx.caller?.tabId
+      const path = grantedPath(tabId)
+      if (tabId && path && openForTab) {
+        await openForTab(tabId, path)
+      }
+      return path ?? null
+    },
 
     'html:read-file': async (ctx, path) => {
       const granted = grantedPath(ctx.caller?.tabId)

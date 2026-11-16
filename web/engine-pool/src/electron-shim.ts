@@ -46,11 +46,35 @@ const noWindows: BrowserWindow[] = []
  * reached. The cast says so plainly: the shape below is what the upstream
  * code actually calls.
  */
+/**
+ * Where the events of a web contents go.
+ *
+ * Upstream pushes events at a renderer with `webContents.send(...)`. The
+ * server has no renderers, so the worker registers where the events of each
+ * web contents should go — to the browser tab it stands for.
+ */
+const contentsPushers = new Map<number, (channel: string, args: unknown[]) => void>()
+
+/** Send the events of a web contents to the browser. */
+export function registerContentsPush(
+  id: number,
+  push: (channel: string, args: unknown[]) => void,
+): void {
+  contentsPushers.set(id, push)
+}
+
+/** Stop sending the events of a web contents to the browser. */
+export function unregisterContentsPush(id: number): void {
+  contentsPushers.delete(id)
+}
+
 export function createWebContents(id: number): ServerWebContents {
   const contents = {
     id,
-    send: () => {},
-    isDestroyed: () => true,
+    send: (channel: string, ...args: unknown[]) => {
+      contentsPushers.get(id)?.(channel, args)
+    },
+    isDestroyed: () => false,
     getURL: () => '',
     once: () => undefined,
     removeListener: () => undefined,
@@ -216,6 +240,8 @@ export type ContextMenuParams = Electron.ContextMenuParams
  */
 export interface ShimApp {
   name: string
+  /** The errors the upstream `app.whenReady()` callback threw. */
+  readyErrors: unknown[]
   getPath(name: string): string
   setPath(name: string, path: string): void
   getAppPath(): string
@@ -273,10 +299,38 @@ export const app: ShimApp = {
   getLocale: (): string => 'en-US',
   isPackaged: false,
   isReady: (): boolean => true,
+  /**
+   * The errors the upstream `app.whenReady()` callback threw.
+   *
+   * Upstream registers its IPC surface inside that callback, so a failure
+   * there means the server has no handlers at all — it has to be visible.
+   */
+  readyErrors: [] as unknown[],
   on: (_event: string, _listener: (event: ShimAppEvent, ...args: any[]) => void): ShimApp => app,
   once: (_event: string, _listener: (event: ShimAppEvent, ...args: any[]) => void): ShimApp => app,
   quit: () => {},
-  whenReady: async (): Promise<void> => {},
+  whenReady: (): Promise<void> => {
+    // The upstream code registers its handlers in the callback of
+    // `whenReady()`. A failure there is silent unless it is caught here.
+    const ready = Promise.resolve()
+    return {
+      then: <TResult1 = void, TResult2 = never>(
+        onFulfilled?: ((value: void) => TResult1 | PromiseLike<TResult1>) | null,
+        onRejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+      ) =>
+        ready.then(
+          (value) => {
+            try {
+              return onFulfilled ? onFulfilled(value) : (value as unknown as TResult1)
+            } catch (error) {
+              app.readyErrors.push(error)
+              throw error
+            }
+          },
+          onRejected,
+        ),
+    } as Promise<void>
+  },
   commandLine: {
     appendSwitch: () => {},
     appendArgument: () => {},
@@ -301,6 +355,25 @@ const paths = new Map<string, string>()
  * implementation of the same contract.
  */
 export const ipcHandlers = new Map<string, (...args: never[]) => unknown>()
+
+/**
+ * The listeners the upstream main process registered with `ipcMain.on`.
+ *
+ * Upstream uses `on` for the messages the **renderer** sends without
+ * waiting for an answer — "the document was renamed", "the save finished".
+ * The server has to receive those too, so they are captured the same way
+ * the handlers are.
+ */
+export const ipcListeners = new Map<string, Set<ShimIpcHandler>>()
+
+/**
+ * Every channel the upstream code registered, in order.
+ *
+ * Two applications may register the same channel name (a shared one such
+ * as the theme). The list says which ones did, so a conflict is visible
+ * instead of silent.
+ */
+export const ipcRegistrations: string[] = []
 
 /**
  * The Electron event the upstream handlers receive.
@@ -347,19 +420,36 @@ export type IpcMain = Electron.IpcMain
 export const ipcMain = {
   handle: (channel: string, handler: ShimIpcHandler): IpcMain => {
     ipcHandlers.set(channel, handler as (...args: never[]) => unknown)
+    ipcRegistrations.push(channel)
     return ipcMain
   },
   handleOnce: (channel: string, handler: ShimIpcHandler): IpcMain => {
     ipcHandlers.set(channel, handler as (...args: never[]) => unknown)
+    ipcRegistrations.push(channel)
     return ipcMain
   },
-  on: (): IpcMain => ipcMain,
-  once: (): IpcMain => ipcMain,
+  on: (channel: string, handler: ShimIpcHandler): IpcMain => {
+    const listeners = ipcListeners.get(channel) ?? new Set<ShimIpcHandler>()
+    listeners.add(handler)
+    ipcListeners.set(channel, listeners)
+    ipcRegistrations.push(channel)
+    return ipcMain
+  },
+  once: (channel: string, handler: ShimIpcHandler): IpcMain => {
+    return ipcMain.on(channel, handler)
+  },
+  removeListener: (channel: string, handler: ShimIpcHandler): IpcMain => {
+    ipcListeners.get(channel)?.delete(handler)
+    return ipcMain
+  },
   removeHandler: (channel: string): IpcMain => {
     ipcHandlers.delete(channel)
     return ipcMain
   },
-  removeAllListeners: (): IpcMain => ipcMain,
+  removeAllListeners: (channel: string): IpcMain => {
+    ipcListeners.delete(channel)
+    return ipcMain
+  },
 } as unknown as IpcMain
 
 export const ipcRenderer = {
@@ -455,28 +545,91 @@ export const clipboard = {
   writeBuffer: (_format: string, _buffer: Buffer) => {},
 }
 
+/**
+ * A dialog the upstream code wants to show.
+ *
+ * The desktop app opens a native dialog; the browser has no native dialog,
+ * so the server asks the browser instead: the request travels down the
+ * event stream to the tab that triggered it, and the browser answers with
+ * the chosen path.
+ */
+export interface ShimDialogRequest {
+  /** The id the answer comes back with. */
+  id: string
+  kind: 'save' | 'open' | 'message'
+  /** The Electron options the upstream code passed. */
+  options: unknown
+}
+
+/**
+ * Who shows the dialog.
+ *
+ * The worker sets this to the bridge between the engine and the browser.
+ * Without it — a headless run — every dialog is cancelled, which is the
+ * honest answer for a server that cannot show one.
+ */
+export type ShimDialogPresenter = (request: ShimDialogRequest) => void
+
+let dialogPresenter: ShimDialogPresenter | null = null
+
+/** The dialogs that are waiting for an answer. */
+const waitingDialogs = new Map<string, (result: unknown) => void>()
+
+let dialogCounter = 0
+
+/** Let the worker show the dialogs in the browser. */
+export function setDialogPresenter(presenter: ShimDialogPresenter | null): void {
+  dialogPresenter = presenter
+}
+
+/**
+ * Answer a dialog the browser was asked to show.
+ *
+ * The result is what Electron's dialog would have returned.
+ */
+export function resolveDialog(id: string, result: unknown): boolean {
+  const resolve = waitingDialogs.get(id)
+  if (!resolve) return false
+  waitingDialogs.delete(id)
+  resolve(result)
+  return true
+}
+
+/** Ask the browser to show a dialog and wait for its answer. */
+function askBrowser<T>(kind: ShimDialogRequest['kind'], options: unknown): Promise<T> {
+  if (!dialogPresenter) {
+    return Promise.resolve(
+      (kind === 'save'
+        ? { canceled: true, filePath: '' }
+        : kind === 'open'
+          ? { canceled: true, filePaths: [] }
+          : { response: 1, checkboxChecked: false }) as T,
+    )
+  }
+  dialogCounter += 1
+  const id = `dialog-${dialogCounter}`
+  return new Promise<T>((resolve) => {
+    waitingDialogs.set(id, resolve as (result: unknown) => void)
+    dialogPresenter!({ id, kind, options })
+  })
+}
+
 export const dialog = {
   showOpenDialog: async (
-    _options?: Electron.OpenDialogOptions,
+    options?: Electron.OpenDialogOptions,
     _parent?: unknown,
-  ): Promise<Electron.OpenDialogReturnValue> => ({
-    canceled: true,
-    filePaths: [],
-  }),
+  ): Promise<Electron.OpenDialogReturnValue> =>
+    askBrowser<Electron.OpenDialogReturnValue>('open', options),
   showSaveDialog: async (
-    _options?: Electron.SaveDialogOptions,
+    options?: Electron.SaveDialogOptions,
     _parent?: unknown,
-  ): Promise<Electron.SaveDialogReturnValue> => ({
-    canceled: true,
-    filePath: '',
-  }),
+  ): Promise<Electron.SaveDialogReturnValue> =>
+    askBrowser<Electron.SaveDialogReturnValue>('save', options),
   showMessageBox: async (
-    _optionsOrParent?: Electron.MessageBoxOptions | unknown,
+    optionsOrParent?: Electron.MessageBoxOptions | unknown,
     _maybeParent?: unknown,
-  ): Promise<{ response: number; checkboxChecked: boolean }> => ({
-    response: 1,
-    checkboxChecked: false,
-  }),
+  ): Promise<{ response: number; checkboxChecked: boolean }> =>
+    askBrowser<{ response: number; checkboxChecked: boolean }>('message', optionsOrParent),
 }
 
 export const net = {
@@ -561,16 +714,33 @@ export const desktopCapturer = {
   }): Promise<{ id: string; name: string }[]> => [],
 }
 
-/** A detached window view; the server draws nothing of its own. */
+/**
+ * A detached window view; the server draws nothing of its own.
+ *
+ * Upstream puts every document in a `WebContentsView` — a renderer without
+ * a window of its own — and the view is what tells the main process which
+ * web contents belongs to which document. The server needs it for the same
+ * reason: the upstream code grants the view's web contents the paths it may
+ * read and write, and it keys its session by the web contents id.
+ *
+ * Every view therefore has its own id, or two documents would share one
+ * session.
+ */
 export class WebContentsView {
+  readonly id: number
   readonly webContents: ServerWebContents
 
+  private static nextId = 1
+
   constructor(_options?: Record<string, unknown>) {
-    this.webContents = createWebContents(0)
+    this.id = WebContentsView.nextId++
+    this.webContents = createWebContents(this.id)
   }
 
+  setVisible(_visible: boolean): void {}
   setBounds(_bounds?: Electron.Rectangle): void {}
   setBackgroundColor(_color?: string): void {}
+  async loadURL(_url: string): Promise<void> {}
 }
 
 /** The application menu; the server has none. */

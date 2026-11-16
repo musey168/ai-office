@@ -37,6 +37,27 @@ describe('EnginePool', () => {
 
 const workerBuilt = existsSync(WORKER_PATH)
 
+describe.skipIf(!workerBuilt)('The upstream document applications', () => {
+  it('register their handlers in the worker', async () => {
+    const workspace = realpathSync(await mkdtemp(join(tmpdir(), 'aio-docs-')))
+    const pool = new EnginePool({ workspaceRoots: [workspace], size: 1 })
+    try {
+      const listed = (await pool.run<{ channels: string[]; errors: string[] }>('document:channels')) ?? {
+        channels: [],
+        errors: [],
+      }
+      const channels = listed.channels
+      // The upstream main processes register their own surface; the server
+      // does not write a second one.
+      expect(channels).toContain('markdown:save')
+      expect(channels).toContain('html:save')
+      expect(channels).toContain('pdf:save')
+    } finally {
+      await pool.close()
+    }
+  })
+})
+
 describe.skipIf(!workerBuilt)('EnginePool (with the built worker)', () => {
   it('parses a presentation and hands back the render tree', async () => {
     const workspace = realpathSync(await mkdtemp(join(tmpdir(), 'aio-pool-')))

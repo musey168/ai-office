@@ -34,6 +34,14 @@ const queuedEvents: { tabId: string; channel: string; args: unknown[] }[] = []
 let deliverEvent: ((event: { tabId: string; channel: string; args: unknown[] }) => void) | null =
   null
 
+// The upstream main processes open native dialogs ("save as"); the browser
+// shows them instead, so the request travels to the tab the same way the
+// other engine events do.
+const queuedDialogs: { id: string; dialogKind: string; options: unknown; tabId: string }[] = []
+let deliverDialog:
+  | ((dialog: { id: string; dialogKind: string; options: unknown; tabId: string }) => void)
+  | null = null
+
 const engines = new EnginePool({
   workspaceRoots: [workspaceRoot],
   workerPath: process.env.AIOFFICE_ENGINE_WORKER
@@ -42,6 +50,10 @@ const engines = new EnginePool({
   onEvent: (event) => {
     if (deliverEvent) deliverEvent(event)
     else queuedEvents.push(event)
+  },
+  onDialog: (dialog) => {
+    if (deliverDialog) deliverDialog(dialog)
+    else queuedDialogs.push(dialog)
   },
 })
 
@@ -62,6 +74,18 @@ deliverEvent = (event) => {
 }
 for (const queued of queuedEvents.splice(0, queuedEvents.length)) {
   deliverEvent(queued)
+}
+
+// A dialog the upstream code asked for is an event of its own: the browser
+// shows the file picker and answers through the `document:dialog-answer`
+// channel.
+deliverDialog = (dialog) => {
+  office.router.events.publishToTab(dialog.tabId, 'document:dialog', [
+    { id: dialog.id, kind: dialog.dialogKind, options: dialog.options },
+  ])
+}
+for (const queued of queuedDialogs.splice(0, queuedDialogs.length)) {
+  deliverDialog(queued)
 }
 
 office.server.listen(port, host, () => {

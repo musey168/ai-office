@@ -13,12 +13,20 @@ import type { ChannelHandler } from '../router'
 export interface MarkdownChannelDeps {
   store: WorkspaceStore
   tabs: TabRegistry
+  /**
+   * Open the document in the engine.
+   *
+   * Upstream keeps the open note in its main process — it grants the paths
+   * it may read and write, and its save handler writes it. The engine has
+   * to hold the document before a save can reach the upstream handler.
+   */
+  openForTab?: (tabId: string, filePath: string) => Promise<void>
 }
 
 export function createMarkdownChannels(
   deps: MarkdownChannelDeps,
 ): Record<string, ChannelHandler> {
-  const { store, tabs } = deps
+  const { store, tabs, openForTab } = deps
 
   /** The path this tab was opened with; null for an untitled note. */
   const grantedPath = (tabId?: string): string | undefined => {
@@ -27,7 +35,14 @@ export function createMarkdownChannels(
   }
 
   return {
-    'markdown:consume-pending': (ctx) => grantedPath(ctx.caller?.tabId) ?? null,
+    'markdown:consume-pending': async (ctx) => {
+      const tabId = ctx.caller?.tabId
+      const path = grantedPath(tabId)
+      if (tabId && path && openForTab) {
+        await openForTab(tabId, path)
+      }
+      return path ?? null
+    },
 
     'markdown:read-file': async (ctx, path) => {
       const granted = grantedPath(ctx.caller?.tabId)

@@ -275,6 +275,20 @@ shim 把它转成 token，服务端还原成字节交给存储层。
 没有打印机），上游渲染器因此走它正常的分支。只有真会崩的两条明确拒绝：
 `slides:export-pdf`（要渲染窗口）与 `slides:print`（要 CUPS）。
 
+**documents**：markdown / html / pdf 三个应用的主进程同样整个跑在 worker 里
+（101 个 handler）。通道名单由上游自己给出（worker 问上游模块要），
+语义由上游的 handler 给出。服务端自己实现的只有：
+
+- `markdown:consume-pending` / `html:consume-pending` / `pdf:consume-pending`：
+  除了返回路径，还在**上游打开文档**（`document:open` → 上游 `createXxxView`
+  → 它授权路径、监视磁盘）。上游的保存 handler 靠这份授权找到文件，
+  所以这一步不能省；
+- `document:dialog-answer`：浏览器里的对话框回传原生对话框的结果。
+
+「另存为」的路径选择界面还没做——后端链路已通（原生对话框的请求经引擎协议
+回到 HTTP 进程，作为 `document:dialog` 事件投递给那个 tab），缺的是浏览器端的
+文件树选择器。
+
 ## AI 通道
 
 上游 `registerAiIpc()`（`apps/docs/src/main/docs-main.ts:4456`）由 shell 调用**一次**（`apps/shell/src/main/index.ts:7032`），六个编辑器与 shell home 共用同一批通道。网页版同样只注册一份实现——上游靠 `ipcMain.removeHandler` 做「后注册覆盖」，网页版是单一路由表，不存在覆盖顺序问题。

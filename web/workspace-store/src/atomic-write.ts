@@ -1,4 +1,4 @@
-import { copyFile, open, rename, unlink, writeFile } from 'node:fs/promises'
+import { copyFile, open, rename, unlink, writeFile } from 'fs/promises'
 import { randomBytes } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
 

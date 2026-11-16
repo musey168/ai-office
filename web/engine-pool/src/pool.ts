@@ -1,8 +1,8 @@
-import { existsSync } from 'node:fs'
+import { existsSync } from 'fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Worker } from 'node:worker_threads'
-import type { EngineEvent, EngineMessage } from './protocol'
+import type { EngineDialog, EngineEvent, EngineMessage } from './protocol'
 
 /**
  * The engine pool: a small set of worker threads that run the upstream
@@ -41,6 +41,13 @@ export interface EnginePoolOptions {
    * where the pool hands them over.
    */
   onEvent?: (event: EngineEvent) => void
+  /**
+   * Where the dialogs the upstream code opens arrive.
+   *
+   * The desktop app opens a native dialog; the browser has none, so the
+   * worker asks the browser to show it and waits for the answer.
+   */
+  onDialog?: (dialog: EngineDialog) => void
 }
 
 interface PendingJob {
@@ -67,6 +74,7 @@ export class EnginePool {
   private readonly workerPath: string
   private readonly timeoutMs: number
   private readonly onEvent: ((event: EngineEvent) => void) | undefined
+  private readonly onDialog: ((dialog: EngineDialog) => void) | undefined
   private nextId = 0
   private closed = false
 
@@ -74,6 +82,7 @@ export class EnginePool {
     this.workerPath = options.workerPath ?? WORKER_PATH
     this.timeoutMs = options.timeoutMs ?? 120_000
     this.onEvent = options.onEvent
+    this.onDialog = options.onDialog
     if (!options.workspaceRoots.length) {
       throw new Error('the engine pool needs at least one workspace root')
     }
@@ -93,6 +102,10 @@ export class EnginePool {
   private spawn(workspaceRoots: string[]): Worker {
     const worker = new Worker(this.workerPath, {
       workerData: { workspaceRoots },
+      // The worker's own output is the server's log: the upstream code
+      // warns about things the browser cannot see.
+      stdout: true,
+      stderr: true,
       // The upstream slides main process loads the whole editor — the fonts,
       // the translations, every operation module — and keeps the deck's
       // history in snapshots. 256 MB was not enough; the desktop app has no
@@ -102,6 +115,11 @@ export class EnginePool {
     worker.on('message', (message: EngineMessage) => {
       if (message.kind === 'event') {
         this.onEvent?.(message)
+        return
+      }
+      if (message.kind === 'dialog') {
+        // The upstream code opened a dialog; the browser shows it.
+        this.onDialog?.(message)
         return
       }
       const job = this.pending.get(message.id)

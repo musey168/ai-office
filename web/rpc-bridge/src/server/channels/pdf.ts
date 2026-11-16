@@ -22,6 +22,13 @@ export interface PdfChannelDeps {
   bytes: ByteStore
   /** The engine pool, which rasterizes the pages with PDFium. */
   engines: EngineRunner | null
+  /**
+   * Open the document in the engine.
+   *
+   * Upstream keeps the open PDF in its main process — it grants the paths
+   * it may read and write, and its save handler writes it.
+   */
+  openForTab?: (tabId: string, filePath: string) => Promise<void>
 }
 
 export function createPdfChannels(deps: PdfChannelDeps): Record<string, ChannelHandler> {
@@ -48,7 +55,14 @@ export function createPdfChannels(deps: PdfChannelDeps): Record<string, ChannelH
   }
 
   return {
-    'pdf:consume-pending': (ctx) => grantedPath(ctx.caller?.tabId) ?? null,
+    'pdf:consume-pending': async (ctx) => {
+      const tabId = ctx.caller?.tabId
+      const path = grantedPath(tabId)
+      if (tabId && path && deps.openForTab) {
+        await deps.openForTab(tabId, path)
+      }
+      return path ?? null
+    },
 
     /** The whole file as bytes. */
     'pdf:read-file': async (ctx, path) => {

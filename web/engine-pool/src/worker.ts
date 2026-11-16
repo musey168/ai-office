@@ -3,13 +3,24 @@ import { LocalWorkspaceStore } from '@ai-office/workspace-store'
 import { createBlankPdf, renderPageImage, renderPagePreview } from './pdf'
 import { installWasmLookup } from './pdfium'
 import { readSlideMedia } from '../../../apps/slides/src/main/session-state'
-import { useWorkspaceStore } from './fs-control'
+import { useWorkspaceStore } from './fs-control-impl'
 import {
   forgetTab,
   invokeUpstream,
   takeEvents,
   upstreamChannels,
 } from './slides-upstream'
+import {
+  closeDocument,
+  documentChannelConflicts,
+  documentChannels,
+  documentReadyErrors,
+  invokeDocumentUpstream,
+  loadUpstreamDocuments,
+  openDocument,
+  sendDocumentUpstream,
+} from './document-upstream'
+import { resolveDialog, setDialogPresenter } from './electron-shim'
 import type { EngineMessage, EngineRequest } from './protocol'
 
 /**
@@ -40,6 +51,14 @@ const store = new LocalWorkspaceStore({ roots })
 // redirects those imports here, where the fence applies.
 useWorkspaceStore(store, roots)
 
+/**
+ * The tab the worker is working for.
+ *
+ * A worker runs one job at a time, so the upstream code's dialog belongs to
+ * the tab whose job is running.
+ */
+let currentTabId = ''
+
 async function run(job: string, args: unknown[]): Promise<unknown> {
   switch (job) {
     /**
@@ -57,6 +76,63 @@ async function run(job: string, args: unknown[]): Promise<unknown> {
     /** The channels the upstream slides process registered. */
     case 'slides:channels': {
       return upstreamChannels()
+    }
+
+    /**
+     * Call an upstream document handler.
+     *
+     * The upstream main process owns the open document; the browser talks
+     * to it through this channel. The handler is the upstream function
+     * itself — the server shim captured it when the upstream module
+     * registered it.
+     */
+    case 'document:invoke': {
+      const [channel, callArgs, tabId] = args as [string, unknown[], string]
+      currentTabId = tabId
+      return invokeDocumentUpstream(channel, callArgs, tabId)
+    }
+
+    /** Send a message the way the renderer does, without an answer. */
+    case 'document:send': {
+      const [channel, callArgs, tabId] = args as [string, unknown[], string]
+      currentTabId = tabId
+      return sendDocumentUpstream(channel, callArgs, tabId)
+    }
+
+    /**
+     * Open a document the way the desktop app does.
+     *
+     * The upstream `createXxxView` grants the view the paths it may read
+     * and write, so the upstream save handler finds the path by itself.
+     */
+    case 'document:open': {
+      const [app, filePath, tabId] = args as ['markdown' | 'html' | 'pdf', string, string]
+      currentTabId = tabId
+      const senderId = await openDocument(app, filePath, tabId)
+      return { senderId }
+    }
+
+    /** Close a document and forget its session. */
+    case 'document:close': {
+      const [tabId] = args as [string]
+      closeDocument(tabId)
+      return { ok: true }
+    }
+
+    /** The channels the upstream document applications registered. */
+    case 'document:channels': {
+      await loadUpstreamDocuments()
+      return {
+        channels: documentChannels(),
+        errors: documentReadyErrors().map((error) => String(error)),
+        conflicts: documentChannelConflicts(),
+      }
+    }
+
+    /** Answer a dialog the upstream code asked the browser to show. */
+    case 'document:dialog-answer': {
+      const [id, result] = args as [string, unknown]
+      return { ok: resolveDialog(id, result) }
     }
 
     case 'pdf:blank': {
@@ -99,6 +175,19 @@ async function run(job: string, args: unknown[]): Promise<unknown> {
       throw new Error(`unknown engine job "${job}"`)
   }
 }
+
+// The upstream code opens native dialogs; the browser shows them instead.
+// The request goes back to the tab that triggered it, and the answer comes
+// back as a job.
+setDialogPresenter((request) => {
+  parentPort?.postMessage({
+    kind: 'dialog',
+    id: request.id,
+    dialogKind: request.kind,
+    options: request.options,
+    tabId: currentTabId,
+  } satisfies EngineMessage)
+})
 
 parentPort?.on('message', (request: EngineRequest) => {
   void run(request.job, request.args).then(

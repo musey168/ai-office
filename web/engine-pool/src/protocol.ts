@@ -37,7 +37,25 @@ export interface EngineEvent {
   args: unknown[]
 }
 
-/** A message from a worker: either an answer or a pushed event. */
+/** A message from a worker: an answer, a pushed event, or a dialog. */
 export type EngineMessage =
   | ({ kind: 'response' } & EngineResponse)
   | ({ kind: 'event' } & EngineEvent)
+  | ({ kind: 'dialog' } & EngineDialog)
+
+/**
+ * A dialog the upstream code wants the browser to show.
+ *
+ * The desktop app opens a native dialog; the browser has none, so the
+ * worker asks the browser and waits for the answer.
+ */
+export interface EngineDialog {
+  /** The dialog's id; the answer comes back with it. */
+  id: string
+  /** Which kind of dialog it is. */
+  dialogKind: 'save' | 'open' | 'message'
+  /** The Electron options the upstream code passed. */
+  options: unknown
+  /** The tab that triggered it. */
+  tabId: string
+}

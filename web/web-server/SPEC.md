@@ -91,6 +91,10 @@ shell 的 renderer 是多入口（`index` / `update` / `pdf-password`）；第�
 引擎 worker 推的事件（上游幻灯片主进程的 `slides:deck-changed`、
 `slides:history-changed`）走同一条路。
 
+**原生对话框也走这条路**：上游的「另存为」用 Electron 原生对话框，
+浏览器没有，worker 把请求经引擎协议送回 HTTP 进程，作为 `document:dialog`
+事件投递给那个 tab，浏览器用 `document:dialog-answer` 通道回传结果。
+
 ## 缓存
 
 - renderer 的资源文件名**带哈希** → `immutable` 一年 ✓；

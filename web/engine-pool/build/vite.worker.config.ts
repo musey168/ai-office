@@ -71,52 +71,6 @@ export function nodeAssetPlugin(outDir: string): Plugin {
 }
 
 /**
- * The upstream slides code reaches the disk through `node:fs`.
- *
- * On the server every path has to pass the workspace fence, so the
- * upstream imports are redirected to the controlled implementation. The
- * worker's own modules keep the real filesystem — the store itself has to
- * talk to the disk to do its job.
- *
- * The upstream code names the functions it uses in its imports, so the
- * generated module has to have exactly those names. They are read off
- * Node's own module surface at build time: whatever the upstream code
- * imports from `node:fs` exists on the real module, so the names line up.
- */
-export function controlledFilesystemPlugin(): Plugin {
-  const controlledModule = resolve(__dirname, '../src/fs-control.ts')
-  const virtual = '\0controlled-fs'
-  return {
-    name: 'controlled-filesystem',
-    enforce: 'pre',
-    resolveId(source, importer) {
-      if (source !== 'node:fs' && source !== 'node:fs/promises') return null
-      if (!importer) return null
-      // The virtual module reaches the real filesystem through itself; it
-      // must not be redirected again, or the import would loop.
-      if (importer.includes('\0controlled-fs')) return null
-      const from = importer.split('?')[0]
-      // The engine's own code and the store must reach the real filesystem:
-      // the store is what talks to the disk on the workspace's behalf, and
-      // the engine's modules handle their own files (the wasm, the probes).
-      if (from.includes('engine-pool/src/')) return null
-      if (from.includes('workspace-store/')) return null
-      return virtual
-    },
-    load(id) {
-      if (id !== virtual) return null
-      // The upstream code names the functions it imports; the controlled
-      // module answers to exactly those names — the ones that touch the
-      // user's documents resolve through the store, the rest are its own
-      // scratch files.
-      return `
-        export * from ${JSON.stringify(controlledModule)}
-      `
-    },
-  }
-}
-
-/**
  * The build for the server-side engine worker.
  *
  * The upstream engine packages are plain TypeScript, so they are bundled for
@@ -133,7 +87,6 @@ export default defineConfig({
   plugins: [
     upstreamWorkspaceResolver(),
     upstreamDirnamePlugin(),
-    controlledFilesystemPlugin(),
     nodeAssetPlugin(resolve(__dirname, '../dist')),
     // The PDFium wasm travels with the worker: the upstream lookup falls
     // back to `<resourcesPath>/wasm/<file>`, and the worker's resources
@@ -156,7 +109,23 @@ export default defineConfig({
     },
   ],
   resolve: {
-    alias: [{ find: /^electron$/, replacement: resolve(__dirname, '../src/electron-shim.ts') }],
+    alias: [
+      { find: /^electron$/, replacement: resolve(__dirname, '../src/electron-shim.ts') },
+      // The upstream code reaches the disk through `node:fs`. On the server
+      // every path has to pass the workspace fence, so those imports are
+      // redirected to the controlled implementation. Vite never asks the
+      // plugins about a Node builtin — it externalizes it right away — so
+      // the redirection has to be an alias.
+      //
+      // The controlled implementation reaches the real filesystem through
+      // the prefix-less `fs`, which the alias does not match; that is how
+      // it avoids redirecting itself.
+      { find: /^node:fs$/, replacement: resolve(__dirname, '../src/fs-control.ts') },
+      {
+        find: /^node:fs\/promises$/,
+        replacement: resolve(__dirname, '../src/fs-control-promises.ts'),
+      },
+    ],
   },
   // The worker is copied to the server as a single file, so its
   // dependencies have to be inside it. Left external, the server would need

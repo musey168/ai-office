@@ -1,4 +1,4 @@
-import { statSync } from 'node:fs'
+import { statSync } from 'fs'
 import { resolve } from 'node:path'
 import { WorkspaceError } from './errors'
 import { isInside, normalizeForCompare, realizedPath } from './paths'

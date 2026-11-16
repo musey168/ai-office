@@ -1,6 +1,5 @@
 import { ipcHandlers, setWebContentsSource } from './electron-shim'
-import type { WebContents } from 'electron'
-import { SenderRegistry, SlidesContentsRegistry } from './slides-host'
+import { hostContents, hostEvents, hostSenders } from './slides-host'
 import { rewriteMediaUrls } from './slides'
 import { registerSlidesIpc } from '../../../apps/slides/src/main/slides-main'
 import type { EngineEvent } from './protocol'
@@ -30,7 +29,8 @@ type UpstreamHandler = (
 
 let registered = false
 
-const senders = new SenderRegistry()
+/** The sender ids every application shares. */
+const senders = hostSenders
 
 /** The events the upstream code pushed, waiting to go back to the browser. */
 const pending: EngineEvent[] = []
@@ -46,15 +46,9 @@ export function loadUpstreamSlides(): void {
   if (registered) return
   registered = true
 
-  const contents = new SlidesContentsRegistry(senders, {
-    push: (tabId, channel, args) => {
-      pending.push({ tabId, channel, args })
-    },
-    forget: (tabId) => {
-      senders.forget(tabId)
-    },
-  })
-  setWebContentsSource(contents)
+  // The events travel to the browser from the worker's shared queue, so the
+  // documents and the slides report through the same path.
+  setWebContentsSource(hostContents)
 
   registerSlidesIpc()
 }
@@ -96,7 +90,9 @@ export async function invokeUpstream(
 
 /** The events the upstream code pushed since the last call. */
 export function takeEvents(): EngineEvent[] {
-  return pending.splice(0, pending.length)
+  const events = pending.splice(0, pending.length)
+  events.push(...hostEvents.splice(0, hostEvents.length))
+  return events
 }
 
 /** Forget a tab's session. */

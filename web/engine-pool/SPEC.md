@@ -146,14 +146,44 @@ worker 构建（`npm run build:worker`，vite ssr 目标）的三件特别的事
 的围栏，否则一个调用方可以让服务器写到工作区外面。
 
 所以 worker 构建时把**上游模块**的 `node:fs` / `node:fs/promises` 导入重定向到
-`src/fs-control.ts`（`controlledFilesystemPlugin`）：工作区内的读写走 store（围栏 + 原子写），
-工作区外的（应用数据目录、自动保存目录、临时文件）走真文件系统——
+`src/fs-control.ts` 与 `src/fs-control-promises.ts`（`resolve.alias`）：工作区内的读写走 store
+（围栏 + 原子写），工作区外的（应用数据目录、自动保存目录、临时文件）走真文件系统——
 围栏是关于**用户的文档**的。引擎自己的模块与 store 保持真 fs。
+
+**必须是 alias，不能是插件**：vite 对 Node 内置模块直接短路，插件的 `resolveId`
+根本不会被问到——重定向会静默失效，上游的每一次读写都绕过围栏。
+alias 也有自指的风险：实现文件与引擎自己的代码用**无前缀**的 `fs` 拿真文件系统，
+而 alias 只匹配 `node:fs`。
 
 上游的保存是「临时文件 → rename」（`packages/electron-utils/src/atomic-write.ts:197`），
 它用的 `writeFile` / `rename` / `unlink` 全部经过受控 fs，因此也经过围栏 ✓。
 
 同步的读写在工作区内被**拒绝**：store 没有同步面，同步写会绕过原子写。
+
+## 文档应用：markdown / html / pdf
+
+幻灯片的做法对三个文档应用同样成立：上游把打开的文档放在**主进程**里，
+renderer 发送「保存这段文字」「磁盘上的文件变了」，主进程拥有路径、资产与写入本身。
+
+- 三个主进程加载后注册了 **101 个 handler**（与 slides 同一套替身）；
+  它们的注册在 `app.whenReady()` 的回调里，所以 worker 调上游导出的
+  `startMarkdownStandalone()` / `startHtmlStandalone()` / `startPdfStandalone()`；
+- **打开文档要走上游的 `createXxxView`**：它调用上游的 `grantAndTrack`，
+  授权这个 view 可以读写哪些路径、开始监视磁盘。网页版因此把「打开」做成
+  一个引擎作业（`document:open`），让上游的会话、授权与保存逻辑保持是上游的；
+- **保存是上游的 handler**：`markdown:save` / `html:save` / `pdf:save`
+  带着内容与模式进来，上游负责图片资产、冲突检测与原子写。网页版不另写一套；
+- 上游的保存路径是**会话里的**（`savePathByWc` / `allowedByWc`），
+  由 `grantAndTrack` 建立——所以文档必须先在上游打开。
+
+### 对话框：原生对话框变成浏览器里的对话框
+
+上游的「另存为」用 Electron 的原生对话框。浏览器没有原生对话框，
+所以替身的 `dialog` 不再直接回答「取消」，而是**问浏览器**：
+请求经引擎协议回到 HTTP 进程，作为 `document:dialog` 事件投递给那个 tab，
+浏览器用 `document:dialog-answer` 通道回传结果。
+
+这条路径对所有需要对话框的上游通道通用，不只是「另存为」。
 
 ### 自动保存
 

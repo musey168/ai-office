@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, realpathSync } from 'fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 /**

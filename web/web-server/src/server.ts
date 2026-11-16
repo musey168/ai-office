@@ -16,6 +16,7 @@ import {
   createAppChannels,
   createDocsChannels,
   createHomeChannels,
+  createDocumentChannels,
   createHtmlChannels,
   createMarkdownChannels,
   createPdfChannels,
@@ -129,10 +130,30 @@ export function createOfficeServer(options: ServerOptions): OfficeServer {
     },
   })
   router.registerAll(slides.handlers)
-  // The upstream slides main process registers its channels when the module
-  // loads, so the list is not known here. The router asks the slides
-  // channels when its own table has no answer.
-  router.setFallback(async (channel) => slides.upstreamHandler(channel))
+
+  // The document applications work the same way: their channels arrive with
+  // the upstream main processes, so the list is not known here either.
+  const documents = createDocumentChannels({
+    engines: options.engines ?? null,
+    tabs,
+    canReach: (filePath) => {
+      try {
+        fence.assertInside(resolve(filePath))
+        return true
+      } catch {
+        return false
+      }
+    },
+  })
+  router.registerAll(documents.handlers)
+
+  // The router asks the slides and the document channels when its own table
+  // has no answer; the upstream lists come with the engine.
+  router.setFallback(async (channel) => {
+    const fromSlides = await slides.upstreamHandler(channel)
+    if (fromSlides) return fromSlides
+    return documents.upstreamHandler(channel)
+  })
   // The engines push the upstream main process's events at the browser.
   if (options.onEngineEvent) {
     // The deployments that want to see the engine's events get them here;
@@ -146,10 +167,16 @@ export function createOfficeServer(options: ServerOptions): OfficeServer {
     createHomeChannels({ store, tabs, pending, engines: options.engines }),
   )
   router.registerAll(createDocsChannels({ store, bytes: router.bytes, tabs, pending }))
-  router.registerAll(createMarkdownChannels({ store, tabs }))
-  router.registerAll(createHtmlChannels({ store, tabs }))
+  router.registerAll(createMarkdownChannels({ store, tabs, openForTab: documents.openForTab }))
+  router.registerAll(createHtmlChannels({ store, tabs, openForTab: documents.openForTab }))
   router.registerAll(
-    createPdfChannels({ store, tabs, bytes: router.bytes, engines: options.engines ?? null }),
+    createPdfChannels({
+      store,
+      tabs,
+      bytes: router.bytes,
+      engines: options.engines ?? null,
+      openForTab: documents.openForTab,
+    }),
   )
 
   const server = createServer((req, res) => {
