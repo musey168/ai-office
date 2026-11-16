@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { basename, dirname, resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { defineConfig, type Plugin } from 'vite'
 import { upstreamWorkspaceResolver } from '@ai-office/rpc-bridge/build/upstream-resolver'
 
@@ -17,7 +17,7 @@ const PACKAGES_DIR = resolve(__dirname, '../../packages')
  * at module level (the renderer/preload paths). In an ESM bundle there is
  * none, so it is replaced with the directory the file actually lives in.
  */
-function upstreamDirnamePlugin(): Plugin {
+export function upstreamDirnamePlugin(): Plugin {
   return {
     name: 'upstream-dirname',
     enforce: 'pre',
@@ -30,7 +30,7 @@ function upstreamDirnamePlugin(): Plugin {
   }
 }
 
-function nodeAssetPlugin(outDir: string): Plugin {
+export function nodeAssetPlugin(outDir: string): Plugin {
   const assets: { from: string; name: string }[] = []
   return {
     name: 'node-asset-path',
@@ -54,7 +54,7 @@ function nodeAssetPlugin(outDir: string): Plugin {
     load(id) {
       if (!id.endsWith('?node-asset')) return null
       const file = id.slice(0, -'?node-asset'.length)
-      const name = basename(file)
+      const name = file.split('/').pop()!
       assets.push({ from: file, name })
       // The bundle refers to the copy next to it, so the build machine and
       // the server may sit in different directories.
@@ -66,6 +66,52 @@ function nodeAssetPlugin(outDir: string): Plugin {
       for (const asset of assets) {
         copyFileSync(asset.from, resolve(outDir, asset.name))
       }
+    },
+  }
+}
+
+/**
+ * The upstream slides code reaches the disk through `node:fs`.
+ *
+ * On the server every path has to pass the workspace fence, so the
+ * upstream imports are redirected to the controlled implementation. The
+ * worker's own modules keep the real filesystem — the store itself has to
+ * talk to the disk to do its job.
+ *
+ * The upstream code names the functions it uses in its imports, so the
+ * generated module has to have exactly those names. They are read off
+ * Node's own module surface at build time: whatever the upstream code
+ * imports from `node:fs` exists on the real module, so the names line up.
+ */
+export function controlledFilesystemPlugin(): Plugin {
+  const controlledModule = resolve(__dirname, '../src/fs-control.ts')
+  const virtual = '\0controlled-fs'
+  return {
+    name: 'controlled-filesystem',
+    enforce: 'pre',
+    resolveId(source, importer) {
+      if (source !== 'node:fs' && source !== 'node:fs/promises') return null
+      if (!importer) return null
+      // The virtual module reaches the real filesystem through itself; it
+      // must not be redirected again, or the import would loop.
+      if (importer.includes('\0controlled-fs')) return null
+      const from = importer.split('?')[0]
+      // The engine's own code and the store must reach the real filesystem:
+      // the store is what talks to the disk on the workspace's behalf, and
+      // the engine's modules handle their own files (the wasm, the probes).
+      if (from.includes('engine-pool/src/')) return null
+      if (from.includes('workspace-store/')) return null
+      return virtual
+    },
+    load(id) {
+      if (id !== virtual) return null
+      // The upstream code names the functions it imports; the controlled
+      // module answers to exactly those names — the ones that touch the
+      // user's documents resolve through the store, the rest are its own
+      // scratch files.
+      return `
+        export * from ${JSON.stringify(controlledModule)}
+      `
     },
   }
 }
@@ -87,6 +133,7 @@ export default defineConfig({
   plugins: [
     upstreamWorkspaceResolver(),
     upstreamDirnamePlugin(),
+    controlledFilesystemPlugin(),
     nodeAssetPlugin(resolve(__dirname, '../dist')),
     // The PDFium wasm travels with the worker: the upstream lookup falls
     // back to `<resourcesPath>/wasm/<file>`, and the worker's resources
@@ -112,8 +159,11 @@ export default defineConfig({
     alias: [{ find: /^electron$/, replacement: resolve(__dirname, '../src/electron-shim.ts') }],
   },
   // The worker is copied to the server as a single file, so its
-  // dependencies have to be inside it.
-  ssr: { noExternal: ['pdf-lib'] },
+  // dependencies have to be inside it. Left external, the server would need
+  // them installed — and the server container has no node_modules. The
+  // upstream packages pull in a long tail (jszip, opentype, cfb, …), so
+  // everything goes in.
+  ssr: { noExternal: true },
   build: {
     ssr: true,
     outDir: 'dist',

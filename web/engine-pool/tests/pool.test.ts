@@ -45,7 +45,13 @@ describe.skipIf(!workerBuilt)('EnginePool (with the built worker)', () => {
 
     const pool = new EnginePool({ workspaceRoots: [workspace], size: 1 })
     try {
-      const result = (await pool.run('slides:open', ['session-1', deck, 1280])) as {
+      // The deck is opened by the upstream handler — the server is the main
+      // process, and the upstream main process owns the deck.
+      const result = (await pool.run('slides:invoke', [
+        'slides:open-path',
+        [deck, 1280],
+        'tab-1',
+      ])) as {
         path: string
         slides: unknown[]
         size: { cx: number; cy: number }
@@ -55,6 +61,22 @@ describe.skipIf(!workerBuilt)('EnginePool (with the built worker)', () => {
       expect(result.slides.length).toBeGreaterThan(0)
       expect(result.size.cx).toBeGreaterThan(0)
       expect(result.defaultFont).toBeTruthy()
+    } finally {
+      await pool.close()
+    }
+  })
+
+  it('serves the upstream slides channels', async () => {
+    const pool = new EnginePool({ workspaceRoots: ['/tmp'], size: 1 })
+    try {
+      const channels = (await pool.run('slides:channels')) as string[]
+      // The upstream main process registers its editing surface here; the
+      // web port serves the same names, so the upstream renderer works
+      // unchanged.
+      expect(channels).toContain('slides:edit-text')
+      expect(channels).toContain('slides:undo')
+      expect(channels).toContain('slides:redo')
+      expect(channels).toContain('slides:save')
     } finally {
       await pool.close()
     }
@@ -74,7 +96,11 @@ describe.skipIf(!workerBuilt)('EnginePool (with the built worker)', () => {
     const workspace = realpathSync(await mkdtemp(join(tmpdir(), 'aio-pool-')))
     const pool = new EnginePool({ workspaceRoots: [workspace], size: 1 })
     try {
-      await expect(pool.run('slides:open', ['s', '/etc/passwd', 1280])).rejects.toThrow()
+      // The controlled filesystem refuses the path: the upstream handler
+      // reads through it, so the file never reaches the disk.
+      await expect(
+        pool.run('slides:invoke', ['slides:open-path', ['/etc/passwd', 1280], 'tab-1']),
+      ).rejects.toThrow()
     } finally {
       await pool.close()
     }

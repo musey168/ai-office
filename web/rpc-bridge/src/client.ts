@@ -122,7 +122,11 @@ export class BridgeClient {
    */
   private syncSubscription(): void {
     if (this.source) return
-    const url = `${this.baseUrl}/events`
+    // The tab id narrows the subscription: the server pushes the events of a
+    // deck at the tab showing it, not at every browser connected.
+    const tabId = this.contextProvider?.()?.tabId
+    const query = tabId ? `?tab=${encodeURIComponent(tabId)}` : ''
+    const url = `${this.baseUrl}/events${query}`
     const source = this.eventSourceFactory(url)
     source.onmessage = (event: MessageEvent) => {
       void this.dispatch(event.data)

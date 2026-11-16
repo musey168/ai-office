@@ -82,6 +82,15 @@ shell 的 renderer 是多入口（`index` / `update` / `pdf-password`）；第�
 `GET /` **跳转**到 `/app/shell/`（302）。应用本身就是首页，
 让人在地址栏敲一个根路径然后看见 404，是没有理由的。
 
+## 事件按 tab 定向
+
+上游的 `webContents.send` 是发给**某一个** renderer 的。事件流因此按 tab 订阅：
+浏览器的 EventSource URL 带 `?tab=<id>`，服务端只把该 tab 的事件投递给这条连接。
+没有 `?tab=` 的连接（shell 首页）收全部事件——首页关心的是跨标签的 `tabs:changed`。
+
+引擎 worker 推的事件（上游幻灯片主进程的 `slides:deck-changed`、
+`slides:history-changed`）走同一条路。
+
 ## 缓存
 
 - renderer 的资源文件名**带哈希** → `immutable` 一年 ✓；

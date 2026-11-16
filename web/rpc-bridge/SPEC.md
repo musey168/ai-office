@@ -175,6 +175,14 @@ shim 把它转成 token，服务端还原成字节交给存储层。
 
 上游的 `webContents.send` 是 **per-tab 定向**的：`menu:command`（docs）、`menu:action`（sheets）、`slides:menu`（slides）、`docs:mcp-command`、`sheets:mcp-command` 只发给某一个标签页。BroadcastChannel 是全页面广播，**必须带 tabId**，否则多标签串扰。
 
+**落地方式**：事件流按 tab 订阅——浏览器的 EventSource URL 带上 `?tab=<id>`
+（`client.ts` 从页面上下文取），服务端只把该 tab 的事件投递给这条连接
+（`EventHub.publishToTab`）。没有 `?tab=` 的连接（shell 首页）收全部事件——
+首页关心的是跨标签的 `tabs:changed`。
+
+上游的幻灯片主进程在 worker 里，它推的事件（`slides:deck-changed`、
+`slides:history-changed`）也走这条路：worker → 引擎协议 → HTTP 进程 → 事件流 → 那个 tab。
+
 `home:open-path` 是唯一的跨 app 通道（shell 与五个编辑器共用，语义是「打开或切到该文档」），路由表要保留它。
 
 菜单命令本身已在上游定型，不在本模块重新设计：docs 72 个（`apps/docs/src/shared/ipc.ts:204-274`）、sheets 8 个（`apps/sheets/src/shared/desktop-api.ts:3641`）、slides 17 个（`apps/slides/src/shared/ipc.ts:1344-1360`）；pdf / markdown / html 上游没有菜单通道。
@@ -238,7 +246,7 @@ shim 把它转成 token，服务端还原成字节交给存储层。
 | 卡片 | 上游 | 网页版 |
 | --- | --- | --- |
 | AI Docs | 空白文档视图 | 同上（`docs:consume-new-blank` 为空，渲染器自己进空白态） |
-| AI Slides | 空白演示视图 | 同上（`slides:new-blank` 让引擎造一份空白 deck） |
+| AI Slides | 空白演示视图 | 同上（`slides:new-blank` 走上游的 handler，引擎造一份空白 deck） |
 | AI Markdown / AI HTML | 空白缓冲区 | 同上 |
 | AI PDF | 主进程先写空白 PDF | 引擎用上游的 pdf-lib 造空白 PDF，写进工作区再打开 |
 | AI Sheets | 主进程先写空白 .xlsx | **做不到**：xlsx 引擎（Rust sidecar）还没接，通道明确报错 |
@@ -253,8 +261,19 @@ shim 把它转成 token，服务端还原成字节交给存储层。
 有些通道的活儿在**服务端**做（上游在主进程里做）：pptx 的解析与渲染树由
 `web/engine-pool` 的 worker 算好，通道只负责取回结果。
 
-**slides**：`slides:consume-pending-open`、`slides:open-path`、`slides:save`
-（编辑用的 op 通道尚未接入，见下）。
+**slides**：上游的幻灯片主进程**整个跑在 worker 里**，它的 172 个通道原样可用——
+通道的名单由上游自己给出（worker 问上游模块要），语义由上游的 handler 给出，
+服务端只提供 tab id 的映射与路径的围栏。见 `web/engine-pool/SPEC.md` 的
+「幻灯片：在服务端跑上游的主进程」。
+
+服务端自己实现的只有两个「指名路径」的通道：`slides:consume-pending-open` 与
+`slides:open-path`——它们先过 workspace-store 的围栏，路径不在工作区就不让上游碰磁盘。
+打开与保存**也走上游的 handler**：deck 是上游主进程的东西（撤销栈、fit width、模型都在它手里），
+自己实现就等于另立一套模型。
+
+沾原生能力的通道**大多仍走上游 handler**：服务端的替身诚实地回答（对话框取消、剪贴板空、
+没有打印机），上游渲染器因此走它正常的分支。只有真会崩的两条明确拒绝：
+`slides:export-pdf`（要渲染窗口）与 `slides:print`（要 CUPS）。
 
 ## AI 通道
 

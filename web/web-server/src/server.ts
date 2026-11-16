@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { LocalWorkspaceStore, type WorkspaceStore } from '@ai-office/workspace-store'
+import { Fence, LocalWorkspaceStore, type WorkspaceStore } from '@ai-office/workspace-store'
 import type { EngineRunner } from '@ai-office/rpc-bridge'
 import {
   findStaticFile,
@@ -62,6 +62,17 @@ export interface ServerOptions {
   host?: string
   /** The engine pool that runs the server-side format engines. */
   engines?: EngineRunner
+  /**
+   * Where the events the engines push arrive.
+   *
+   * The upstream main process pushes at a renderer (`webContents.send`) —
+   * the deck changed, the undo stack moved. The engine worker does the
+   * same, so the events have to reach the browser tab they belong to.
+   *
+   * The server publishes them itself; this hook is for the deployments
+   * that want to see them too.
+   */
+  onEngineEvent?: (event: { tabId: string; channel: string; args: unknown[] }) => void
   /** The workspace directory the file tree shows and the documents live in. */
   workspaceRoot: string
   /** Where the built renderer applications are. */
@@ -87,6 +98,7 @@ export function createOfficeServer(options: ServerOptions): OfficeServer {
   const bridgeRoot = options.bridgeRoot ?? BRIDGE_ROOT
   const log = options.log ?? ((message: string) => console.log(message))
   const store = options.store ?? new LocalWorkspaceStore({ roots: [workspaceRoot] })
+  const fence = new Fence([workspaceRoot])
 
   const router = new ChannelRouter()
   const tabs = new TabRegistry()
@@ -102,9 +114,34 @@ export function createOfficeServer(options: ServerOptions): OfficeServer {
   // The slides channels are always there: without an engine pool they fail
   // with a clear message instead of vanishing (a missing channel breaks the
   // app's startup path).
-  router.registerAll(
-    createSlidesChannels({ engines: options.engines ?? null, tabs }),
-  )
+  const slides = createSlidesChannels({
+    engines: options.engines ?? null,
+    tabs,
+    // The fence in front of the upstream handler: a path the workspace does
+    // not hold never reaches the disk.
+    canReach: (filePath) => {
+      try {
+        fence.assertInside(resolve(filePath))
+        return true
+      } catch {
+        return false
+      }
+    },
+  })
+  router.registerAll(slides.handlers)
+  // The upstream slides main process registers its channels when the module
+  // loads, so the list is not known here. The router asks the slides
+  // channels when its own table has no answer.
+  router.setFallback(async (channel) => slides.upstreamHandler(channel))
+  // The engines push the upstream main process's events at the browser.
+  if (options.onEngineEvent) {
+    // The deployments that want to see the engine's events get them here;
+    // the server publishes them to the browser itself.
+    const onEngineEvent = options.onEngineEvent
+    router.events.onPublish = (channel, args, tabId) => {
+      onEngineEvent({ tabId, channel, args })
+    }
+  }
   router.registerAll(
     createHomeChannels({ store, tabs, pending, engines: options.engines }),
   )
@@ -204,7 +241,9 @@ export function createOfficeServer(options: ServerOptions): OfficeServer {
       }
       const id = pathname.slice('/media/slide/'.length)
       const mime = url.searchParams.get('mime') ?? 'application/octet-stream'
-      const media = (await options.engines.run<{ body: Uint8Array; mime: string } | null>(
+      // The bytes live in the worker that holds the deck; the request does
+      // not name it, so every worker is asked.
+      const media = (await options.engines.runOnAny<{ body: Uint8Array; mime: string } | null>(
         'slides:media',
         // the upstream URL is the key the engine keeps the bytes under —
         // the query is part of it
@@ -352,6 +391,8 @@ function serveEvents(req: IncomingMessage, res: ServerResponse, router: ChannelR
     .split(',')
     .map((channel) => channel.trim())
     .filter(Boolean)
+  // The tab the stream belongs to; the events of a deck go to that tab.
+  const tabId = url.searchParams.get('tab') ?? undefined
 
   res.statusCode = 200
   res.setHeader('content-type', 'text/event-stream; charset=utf-8')
@@ -365,7 +406,7 @@ function serveEvents(req: IncomingMessage, res: ServerResponse, router: ChannelR
   const send = (event: { channel: string; args: unknown[]; id?: number }): void => {
     res.write(`data: ${JSON.stringify(event)}\n\n`)
   }
-  const unsubscribe = router.events.subscribe(channels, send)
+  const unsubscribe = router.events.subscribe(channels, send, tabId)
   // Upstream's renderer watches for a silent connection too.
   const heartbeat = setInterval(() => res.write(': ping\n\n'), 30_000)
   let closed = false

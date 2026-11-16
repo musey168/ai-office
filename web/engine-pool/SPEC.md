@@ -116,6 +116,51 @@ worker 构建（`npm run build:worker`，vite ssr 目标）的三件特别的事
   服务端替身里自己写了一个最小 PNG 编码器（zlib + CRC ✓）——
   出来的字节和 Electron 的一样 ✓。
 
+## 幻灯片：在服务端跑上游的主进程
+
+上游把 deck 放在**主进程**里，renderer 通过 IPC 驱动它：「改这个字」→ 主进程把操作
+应用到活的模型上 → 把重建的渲染树回给 renderer。网页版是同一个形状——浏览器就是 renderer，
+**服务端就是主进程**——所以上游的主进程代码**原样跑在 worker 里**。
+
+这件事是可行的（实验证实）：把上游 slides-main 用 vite ssr 打成 bundle、`electron` 别名到
+服务端替身，模块加载后 `registerSlidesIpc()` 注册了 **172 个 handler**，其中 117 条是纯逻辑，
+22 条沾原生能力。上游的 MCP 桥（`apps/shell/src/main/mcp/slides-bridge.ts:5`）本来就是
+这么干的——它直接 import 上游的 `applySessionTxn` 与 `sessions`，在无 renderer 的地方驱动编辑。
+
+因此**通道语义只有上游一份**：替身的 `ipcMain.handle` 把上游的注册**捕获**下来
+（`electron-shim.ts` 的 `ipcHandlers`），worker 按通道名调用它们；
+上游没有的通道，router 报 `unknown_channel`——真话。
+
+### 上游要的两样东西
+
+- **会话的键**：上游用 `e.sender.id`（webContents id）定位会话，浏览器没有这个 id。
+  `slides-host.ts` 的 `SenderRegistry` 把 tab id 映射成数字 sender id，两向可查；
+- **事件的去处**：上游用 `webContents.fromId(id)?.send(...)` 把事件推给 renderer
+  （`slides:deck-changed`、`slides:history-changed`）。替身的 `webContents` 指向浏览器那一侧，
+  事件经引擎协议回到 HTTP 进程，再由事件流投递给**那个 tab**——上游的事件是发给一个
+  renderer 的，不是广播。
+
+### 文件访问要过围栏
+
+上游的主进程直接用 `node:fs` 读写 deck。服务端不行：每条到磁盘的路径都得过 workspace-store
+的围栏，否则一个调用方可以让服务器写到工作区外面。
+
+所以 worker 构建时把**上游模块**的 `node:fs` / `node:fs/promises` 导入重定向到
+`src/fs-control.ts`（`controlledFilesystemPlugin`）：工作区内的读写走 store（围栏 + 原子写），
+工作区外的（应用数据目录、自动保存目录、临时文件）走真文件系统——
+围栏是关于**用户的文档**的。引擎自己的模块与 store 保持真 fs。
+
+上游的保存是「临时文件 → rename」（`packages/electron-utils/src/atomic-write.ts:197`），
+它用的 `writeFile` / `rename` / `unlink` 全部经过受控 fs，因此也经过围栏 ✓。
+
+同步的读写在工作区内被**拒绝**：store 没有同步面，同步写会绕过原子写。
+
+### 自动保存
+
+上游每 30 秒把脏的 deck 写进 `userData/slides-autosave/<sha1>.pptx`
+（`apps/slides/src/main/slides-main.ts:630`），用于崩溃恢复。保留这个行为：
+`userData` 指向服务端的应用数据目录，**不落在用户工作区**。
+
 ## 已知耦合
 
 - `packages/cli/src/formats/xlsx.ts:45` 直接 import `apps/sheets/src/main/xlsx-sidecar-client`——上游的反向依赖（CLI 引 app 代码）。网页版**不改上游**，而是在 `web/engine-pool` 内引用同一个客户端文件，行为与上游 CLI 一致；

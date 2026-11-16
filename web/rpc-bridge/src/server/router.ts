@@ -28,6 +28,15 @@ export interface ChannelRouterOptions {
   events?: EventHub
   /** Where a missing channel is reported. */
   onMissing?: (channel: string) => void
+  /**
+   * A last resort for a channel nobody registered.
+   *
+   * Some surfaces are not known up front — the upstream slides main process
+   * registers its channels when the module loads, so the list arrives with
+   * the engine. The router asks this when its own table has no answer, and
+   * uses what comes back (or reports the channel as missing).
+   */
+  fallback?: (channel: string) => Promise<ChannelHandler | undefined>
 }
 
 /**
@@ -44,6 +53,7 @@ export class ChannelRouter {
   readonly events: EventHub
   private readonly handlers = new Map<string, ChannelHandler>()
   private readonly onMissing: (channel: string) => void
+  private fallback: ((channel: string) => Promise<ChannelHandler | undefined>) | undefined
   /** The channels already reported as missing — one line each is enough. */
   private readonly missing = new Set<string>()
 
@@ -53,6 +63,7 @@ export class ChannelRouter {
     this.onMissing = options.onMissing ?? ((channel) => {
       console.warn(`[rpc-bridge] no handler for channel "${channel}"`)
     })
+    this.fallback = options.fallback
   }
 
   register(channel: string, handler: ChannelHandler): this {
@@ -62,6 +73,18 @@ export class ChannelRouter {
 
   registerAll(handlers: Record<string, ChannelHandler>): this {
     for (const [channel, handler] of Object.entries(handlers)) this.register(channel, handler)
+    return this
+  }
+
+  /**
+   * Set the last resort for a channel nobody registered.
+   *
+   * Some surfaces are not known up front — the upstream slides main process
+   * registers its channels when the module loads, so the list arrives with
+   * the engine.
+   */
+  setFallback(fallback: (channel: string) => Promise<ChannelHandler | undefined>): this {
+    this.fallback = fallback
     return this
   }
 
@@ -75,7 +98,7 @@ export class ChannelRouter {
 
   /** Request-应答：the counterpart of `ipcRenderer.invoke`. */
   async invoke(channel: string, args: unknown[], caller?: RpcContext): Promise<unknown> {
-    const handler = this.handlers.get(channel)
+    const handler = await this.resolveHandler(channel)
     if (!handler) {
       this.reportMissing(channel)
       throw new BridgeError('unknown_channel', `no handler for channel "${channel}"`)
@@ -87,7 +110,7 @@ export class ChannelRouter {
 
   /** Fire-and-forget: the counterpart of `ipcRenderer.send`. */
   async send(channel: string, args: unknown[], caller?: RpcContext): Promise<void> {
-    const handler = this.handlers.get(channel)
+    const handler = await this.resolveHandler(channel)
     if (!handler) {
       // Electron drops a `send` to an unregistered channel without a sound;
       // the browser does the same, and only the first one is worth a line.
@@ -96,6 +119,23 @@ export class ChannelRouter {
     }
     const resolved = await this.resolveArgs(args)
     await handler(this.context(channel, caller), ...resolved)
+  }
+
+  /**
+   * The handler for a channel.
+   *
+   * The registered table first; then the fallback, which knows about the
+   * surfaces that are not known up front.
+   */
+  private async resolveHandler(channel: string): Promise<ChannelHandler | undefined> {
+    const registered = this.handlers.get(channel)
+    if (registered) return registered
+    if (!this.fallback) return undefined
+    const found = await this.fallback(channel)
+    if (!found) return undefined
+    // Remember it: the next call does not have to ask again.
+    this.handlers.set(channel, found)
+    return found
   }
 
   private reportMissing(channel: string): void {

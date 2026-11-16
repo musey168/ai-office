@@ -26,11 +26,23 @@ const bridgeRoot = envPath('AIOFFICE_BRIDGES', resolve(here, '../../rpc-bridge/d
 
 // The format engines run in worker threads — a .pptx parse must not block
 // the HTTP event loop.
+//
+// The engines push the upstream main process's events at the browser (the
+// deck changed, the undo stack moved). The server is not up yet, so the
+// events wait for it.
+const queuedEvents: { tabId: string; channel: string; args: unknown[] }[] = []
+let deliverEvent: ((event: { tabId: string; channel: string; args: unknown[] }) => void) | null =
+  null
+
 const engines = new EnginePool({
   workspaceRoots: [workspaceRoot],
   workerPath: process.env.AIOFFICE_ENGINE_WORKER
     ? resolve(process.env.AIOFFICE_ENGINE_WORKER)
     : undefined,
+  onEvent: (event) => {
+    if (deliverEvent) deliverEvent(event)
+    else queuedEvents.push(event)
+  },
 })
 
 const office = createOfficeServer({
@@ -42,6 +54,15 @@ const office = createOfficeServer({
   engines,
   log: (message) => console.log(message),
 })
+
+// The engine's events go to the tab they belong to: an event about
+// somebody's deck is not everybody's business.
+deliverEvent = (event) => {
+  office.router.events.publishToTab(event.tabId, event.channel, event.args)
+}
+for (const queued of queuedEvents.splice(0, queuedEvents.length)) {
+  deliverEvent(queued)
+}
 
 office.server.listen(port, host, () => {
   console.log(`[web-server] listening on http://${host}:${port}`)
