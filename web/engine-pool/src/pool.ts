@@ -93,7 +93,11 @@ export class EnginePool {
   private spawn(workspaceRoots: string[]): Worker {
     const worker = new Worker(this.workerPath, {
       workerData: { workspaceRoots },
-      resourceLimits: { maxOldGenerationSizeMb: 256 },
+      // The upstream slides main process loads the whole editor — the fonts,
+      // the translations, every operation module — and keeps the deck's
+      // history in snapshots. 256 MB was not enough; the desktop app has no
+      // such limit at all.
+      resourceLimits: { maxOldGenerationSizeMb: 1024 },
     })
     worker.on('message', (message: EngineMessage) => {
       if (message.kind === 'event') {
