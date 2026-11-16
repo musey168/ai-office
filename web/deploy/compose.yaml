@@ -25,6 +25,10 @@ services:
       PORT: "8080"
       HOST: "0.0.0.0"
       AIOFFICE_WORKSPACE: /home/quantix/ai-office/data/workspace
+      # The upstream main process keeps its own state here: the autosave
+      # copies it writes for crash recovery, the recent files, the settings.
+      # It is the server's own directory — never the users' workspace.
+      AIOFFICE_APP_DATA: /home/quantix/ai-office/data/app
       AIOFFICE_RENDERERS: /home/quantix/ai-office/app/renderers
       AIOFFICE_BRIDGES: /home/quantix/ai-office/app/bridges
       AIOFFICE_ENGINE_WORKER: /home/quantix/ai-office/app/worker/worker.mjs
@@ -34,6 +38,10 @@ services:
       # user can actually reach on the server.
       - /home/quantix/ai-office/app:/home/quantix/ai-office/app:ro
       - /home/quantix/ai-office/data/workspace:/home/quantix/ai-office/data/workspace
+      # The upstream main process's own state: the autosave copies it writes
+      # for crash recovery, the recent files, the settings. It is the
+      # server's directory, not the users' workspace.
+      - /home/quantix/ai-office/data/app:/home/quantix/ai-office/data/app
     mem_limit: 2g
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
